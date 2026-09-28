@@ -1,0 +1,65 @@
+plugins {
+	id 'java'
+}
+
+group = 'com.osrsindex'
+version = '0.1.0'
+
+def runeLiteVersion = providers.gradleProperty('runeliteVersion').get()
+
+repositories {
+	mavenLocal()
+	maven {
+		name = 'RuneLite releases'
+		url = uri('https://repo.runelite.net')
+	}
+	mavenCentral()
+}
+
+dependencies {
+	compileOnly "net.runelite:client:${runeLiteVersion}"
+
+	testImplementation 'junit:junit:4.13.2'
+	testImplementation "net.runelite:client:${runeLiteVersion}"
+}
+
+// Build with JDK 17 while
+// emitting Java 11 bytecode, which is what the Plugin Hub builds and RuneLite runs.
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(17)
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	options.encoding = 'UTF-8'
+	options.release.set(11)
+}
+
+def launcher = javaToolchains.launcherFor {
+	languageVersion = JavaLanguageVersion.of(17)
+}
+
+// `gradlew run` opens RuneLite in developer mode with this plugin loaded, in its
+// own profile so the normal RuneLite settings are untouched. Log in as usual.
+// To aim it at a local site: gradlew run -Posrsindex.origin=http://localhost:5173
+// and at a local destinations relay: -Posrsindex.relay=ws://localhost:8787
+tasks.register('run', JavaExec) {
+	group = 'application'
+	description = 'Launches RuneLite (developer mode) with the OSRS Index plugin.'
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'com.osrsindex.OsrsIndexPluginLauncher'
+	javaLauncher = launcher
+	jvmArgs '-ea'
+	if (project.hasProperty('osrsindex.origin')) {
+		systemProperty 'osrsindex.origin', project.property('osrsindex.origin')
+	}
+	if (project.hasProperty('osrsindex.relay')) {
+		systemProperty 'osrsindex.relay', project.property('osrsindex.relay')
+	}
+	args '--developer-mode', '--disable-telemetry', '--profile', 'osrs-index-dev'
+}
+
+tasks.withType(Test).configureEach {
+	javaLauncher = launcher
+}
