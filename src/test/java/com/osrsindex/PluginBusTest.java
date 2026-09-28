@@ -352,11 +352,20 @@ public class PluginBusTest
 	}
 
 	@Test
-	public void theVersionItsHelloCarriesMatchesBuildGradle() throws Exception
+	public void theVersionItsHelloCarriesMatchesTheReleaseVersion() throws Exception
 	{
+		// runelite-plugin.properties is the release version: the Plugin Hub reads it, and its standard build
+		// replaces build.gradle. build.gradle, when it names a version, must agree.
+		String properties = new String(Files.readAllBytes(Paths.get("runelite-plugin.properties")), StandardCharsets.UTF_8);
+		Matcher release = Pattern.compile("(?m)^version=(\\S+)").matcher(properties);
+		assertTrue(release.find());
+		assertEquals(release.group(1), OsrsIndexPlugin.VERSION);
+
 		String gradle = new String(Files.readAllBytes(Paths.get("build.gradle")), StandardCharsets.UTF_8);
-		Matcher version = Pattern.compile("(?m)^version = '([^']+)'").matcher(gradle);
-		assertTrue(version.find());
-		assertEquals(version.group(1), OsrsIndexPlugin.VERSION);
+		Matcher build = Pattern.compile("(?m)^version = '([^']+)'").matcher(gradle);
+		if (build.find())
+		{
+			assertEquals(build.group(1), OsrsIndexPlugin.VERSION);
+		}
 	}
 }

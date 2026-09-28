@@ -1,5 +1,12 @@
 # OSRS Index
 
+> [!WARNING]
+> **Work in progress: not officially live.** Neither this plugin nor [osrsindex.com](https://osrsindex.com) has
+> launched yet.
+> - Accounts on the site are invite-only.
+> - Features, and what the plugin sends, may change without notice.
+> - The plugin is not on the RuneLite Plugin Hub.
+
 A RuneLite plugin that syncs your character to your own [osrsindex.com](https://osrsindex.com) account, and brings
 the site into the game. Only you can see what it sends, on the site's home page and your character page.
 
@@ -10,8 +17,6 @@ the site into the game. Only you can see what it sends, on the site's home page 
   Path.
 - **A panel** with your last sync and buttons to your character page, the map at your location and your account.
 - **Right-click lookups:** "OSRS Index" beside Examine on items and NPCs opens the site's search.
-
-Accounts on osrsindex.com are invite-only.
 
 ## Linking
 
