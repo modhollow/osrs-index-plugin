@@ -1,14 +1,11 @@
 # OSRS Index
 
-> [!WARNING]
-> **Work in progress: not officially live.** Neither this plugin nor [osrsindex.com](https://osrsindex.com) has
-> launched yet.
-> - Accounts on the site are invite-only.
-> - Features, and what the plugin sends, may change without notice.
-> - The plugin is not on the RuneLite Plugin Hub.
-
 A RuneLite plugin that syncs your character to your own [osrsindex.com](https://osrsindex.com) account, and brings
 the site into the game. Only you can see what it sends, on the site's home page and your character page.
+
+**You need a free osrsindex.com account to link it.** Make one at [osrsindex.com/account](https://osrsindex.com/account)
+with just your email address: the site emails you a code, and the same code creates the account. An account tracks
+up to 10 characters.
 
 - **One-click linking:** no token to paste and no code to type.
 - **Character sync:** gear, bank and item stores, skills, quests, diaries, combat achievements, collection log, slayer,
@@ -22,7 +19,8 @@ the site into the game. Only you can see what it sends, on the site's home page 
 
 1. Log in to the game, open the **OSRS Index** sidebar panel (the orange roundel), and click **Link with
    osrsindex.com**.
-2. Your browser opens at osrsindex.com with this client's code already filled in. Sign in if you are not already.
+2. Your browser opens at osrsindex.com with this client's code already filled in. Sign in, or make an account, if
+   you are not already signed in.
    Check that the page names your character and shows the same code as the panel, then click **Approve**.
 3. Switch back to RuneLite. **The first link takes up to about 15 seconds after you approve.** Chat then says
    "Linked to your osrsindex.com account.", and syncing starts.
@@ -47,7 +45,7 @@ osrsindex.com account page.
 | Combat achievements | at login, and when one completes |
 | Collection log (obtained/total, plus the items on each log page you open) | at login, and as you browse the log |
 | Location (x, y, plane, world) | when you move |
-| Progress values: combat achievement tasks, diary tasks, slayer, quest steps, music, clues, minigames, pets, fairy rings, prayers | when any changes |
+| Progress values: combat achievement tasks, diary tasks, slayer, quest steps, music, clues, minigames, pets, fairy rings, prayers; current named Slayer assignment and remaining count when the client can resolve it | when any changes |
 | Item stores: looting bag, seed vault, GIM group storage, quiver, POH costume room, forestry kit, huntsman's kit | when one is opened or checked |
 | Kill counts, from "Your X kill count is: N." chat lines | as they appear |
 | Grand Exchange offers | when an offer changes |
@@ -102,6 +100,7 @@ Turn it off with **Right-click lookups** under *Look up on osrsindex.com* in the
 | Synced to your osrsindex.com account. | The first sync of the session was stored. |
 | osrsindex.com did not accept this client's link… | The link was revoked. Link again from the panel. |
 | The site refused part of a sync (code). | The site could not store part of a sync. It is sent again when that data changes. |
+| Your osrsindex.com account already tracks the most characters it can… | The account is full, so this character was not synced. Delete tracker data on your account page to make room; the plugin tries again every 15 minutes. |
 | osrsindex.com: routing to PLACE (x, y, plane) with Shortest Path. | A place you sent from the site's map is being routed. |
 | osrsindex.com sent PLACE (x, y, plane), but Shortest Path is not on. | Install or turn on Shortest Path, then send the place again. |
 

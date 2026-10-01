@@ -21,6 +21,7 @@ import net.runelite.api.QuestState;
 import net.runelite.api.Skill;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.InventoryID;
+import net.runelite.api.gameval.DBTableID;
 import net.runelite.api.gameval.ItemID;
 import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.api.gameval.VarbitID;
@@ -377,8 +378,8 @@ class CharacterReader
 
 	// --- sections (schema 3) -----------------------------------------------
 
-	/** Every allowlisted var by its gameval name (GameVars). Zeros are sent too: "not done" is the point. */
-	JsonObject vars()
+	/** Numeric gamevals remain schema 3 compatible; schema 4 adds a client-resolved live Slayer task. */
+	JsonObject vars(int schema)
 	{
 		JsonObject out = new JsonObject();
 		for (int i = 0; i < GameVars.VARBIT_IDS.length; i++)
@@ -389,7 +390,93 @@ class CharacterReader
 		{
 			out.addProperty(GameVars.VARP_NAMES[i], client.getVarpValue(GameVars.VARP_IDS[i]));
 		}
+		if (schema >= 4)
+		{
+			int remaining = client.getVarpValue(VarPlayerID.SLAYER_COUNT);
+			if (remaining > 0)
+			{
+				addSlayerAssignment(out, schema, remaining, currentSlayerTaskName(), currentSlayerAreaName());
+			}
+		}
 		return out;
+	}
+
+	/** RuneLite's own Slayer plugin resolves the same task and area DB rows. Unknown rows stay unknown. */
+	@Nullable
+	private String currentSlayerTaskName()
+	{
+		int taskId = client.getVarpValue(VarPlayerID.SLAYER_TARGET);
+		int row;
+		if (taskId == 98) // Boss task sublist, as in RuneLite SlayerPlugin.
+		{
+			var rows = client.getDBRowsByValue(DBTableID.SlayerTaskSublist.ID,
+				DBTableID.SlayerTaskSublist.COL_TASK_SUBTABLE_ID, 0,
+				client.getVarbitValue(VarbitID.SLAYER_TARGET_BOSSID));
+			if (rows.isEmpty())
+			{
+				return null;
+			}
+			row = (Integer) client.getDBTableField(rows.get(0), DBTableID.SlayerTaskSublist.COL_TASK, 0)[0];
+		}
+		else
+		{
+			var rows = client.getDBRowsByValue(DBTableID.SlayerTask.ID, DBTableID.SlayerTask.COL_ID, 0, taskId);
+			if (rows.isEmpty())
+			{
+				return null;
+			}
+			row = rows.get(0);
+		}
+		Object[] fields = client.getDBTableField(row, DBTableID.SlayerTask.COL_NAME_UPPERCASE, 0);
+		return fields.length > 0 && fields[0] instanceof String ? (String) fields[0] : null;
+	}
+
+	@Nullable
+	private String currentSlayerAreaName()
+	{
+		int areaId = client.getVarpValue(VarPlayerID.SLAYER_AREA);
+		if (areaId <= 0)
+		{
+			return null;
+		}
+		var rows = client.getDBRowsByValue(DBTableID.SlayerArea.ID, DBTableID.SlayerArea.COL_AREA_ID, 0, areaId);
+		if (rows.isEmpty())
+		{
+			return null;
+		}
+		Object[] fields = client.getDBTableField(rows.get(0), DBTableID.SlayerArea.COL_AREA_NAME_IN_HELPER, 0);
+		return fields.length > 0 && fields[0] instanceof String ? (String) fields[0] : null;
+	}
+
+	/** Shared with the unit test: a zero count, invalid name or missing DB row must not create a task. */
+	static void addSlayerAssignment(JsonObject out, int schema, int remaining, @Nullable String name, @Nullable String area)
+	{
+		if (schema < 4 || remaining <= 0 || !validSlayerText(name))
+		{
+			return;
+		}
+		out.addProperty("SLAYER_TASK_NAME", name);
+		if (validSlayerText(area))
+		{
+			out.addProperty("SLAYER_TASK_AREA", area);
+		}
+	}
+
+	private static boolean validSlayerText(@Nullable String text)
+	{
+		if (text == null || text.isEmpty() || text.length() > 80 || !text.trim().equals(text))
+		{
+			return false;
+		}
+		for (int i = 0; i < text.length(); i++)
+		{
+			char c = text.charAt(i);
+			if (c < 0x20 || (c >= 0x7f && c <= 0x9f))
+			{
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/** The occupied Grand Exchange slots. Null before the offers have loaded. */

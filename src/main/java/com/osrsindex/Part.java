@@ -22,7 +22,7 @@ enum Part
 	VARS("vars", 3);
 
 	/** The newest schema this plugin speaks. */
-	static final int LATEST_SCHEMA = 3;
+	static final int LATEST_SCHEMA = 4;
 
 	/** The body key. */
 	final String key;

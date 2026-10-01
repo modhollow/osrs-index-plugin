@@ -50,6 +50,22 @@ public class SyncOutcomeTest
 	}
 
 	@Test
+	public void aFullAccountWaitsFifteenMinutesInsteadOfRetryingEveryMinute()
+	{
+		SyncOutcome outcome = SyncOutcome.of(409, "{\"code\":\"too_many_characters\",\"message\":\"…\"}", null);
+		assertEquals(SyncOutcome.Kind.ACCOUNT_FULL, outcome.kind);
+		assertEquals(SyncOutcome.ACCOUNT_FULL_RETRY_SECONDS, outcome.waitSeconds);
+		assertEquals("too_many_characters", outcome.code);
+	}
+
+	@Test
+	public void anyOther409IsAnOrdinaryRetry()
+	{
+		assertEquals(SyncOutcome.Kind.RETRY, SyncOutcome.of(409, "{\"code\":\"something_else\"}", null).kind);
+		assertEquals(SyncOutcome.Kind.RETRY, SyncOutcome.of(409, "<html>conflict</html>", null).kind);
+	}
+
+	@Test
 	public void tooFrequentHonoursRetryAfter()
 	{
 		SyncOutcome outcome = SyncOutcome.of(429, "{\"code\":\"too_frequent\"}", "17");

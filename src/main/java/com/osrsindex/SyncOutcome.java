@@ -25,6 +25,12 @@ final class SyncOutcome
 		BAD_TOKEN,
 		/** 413: the body was too large; shrink the budget. */
 		TOO_LARGE,
+		/**
+		 * 409 too_many_characters: the account already tracks as many characters as the site allows,
+		 * and this is a new one. Nothing was stored. Try again only rarely, in case the player frees a
+		 * slot on the site.
+		 */
+		ACCOUNT_FULL,
 		/** 429, 503, 5xx or no response: wait, then send the latest state. */
 		RETRY,
 	}
@@ -32,6 +38,8 @@ final class SyncOutcome
 	/** One sync per token per 30 seconds; a second more keeps clear of the boundary. */
 	static final int FLOOR_SECONDS = 31;
 	static final int DEFAULT_RETRY_SECONDS = 60;
+	/** After ACCOUNT_FULL: fifteen minutes, so a full account costs the site four requests an hour, not sixty. */
+	static final int ACCOUNT_FULL_RETRY_SECONDS = 900;
 
 	final Kind kind;
 	final String code;
@@ -71,6 +79,10 @@ final class SyncOutcome
 		if (status == 413)
 		{
 			return new SyncOutcome(Kind.TOO_LARGE, code, 0);
+		}
+		if (status == 409 && "too_many_characters".equals(code))
+		{
+			return new SyncOutcome(Kind.ACCOUNT_FULL, code, ACCOUNT_FULL_RETRY_SECONDS);
 		}
 		int wait = seconds(retryAfter);
 		return new SyncOutcome(Kind.RETRY, code, wait > 0 ? wait + 1 : DEFAULT_RETRY_SECONDS);

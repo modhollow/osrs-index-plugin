@@ -96,7 +96,7 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 
 	static final String TOKEN_PREFIX = "osrsidx_";
 	/** This release, as build.gradle's {@code version} says; the plugin bus {@code hello} carries it. */
-	static final String VERSION = "0.1.0";
+	static final String VERSION = "0.2.0";
 	/** This plugin's id on the plugin bus (docs/plugin-bus.md), which is also its namespace there. */
 	static final String BUS_ID = "osrsindex";
 	private static final MediaType JSON = MediaType.parse("application/json");
@@ -190,6 +190,7 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 	private long nextSendAtMillis;
 	private String rejectedToken;
 	private boolean announcedFirstSync;
+	private boolean announcedAccountFull;
 
 	@Provides
 	OsrsIndexConfig provideConfig(ConfigManager configManager)
@@ -643,7 +644,7 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		}
 		if (tickCount % POLL_VARS_EVERY_TICKS == 0)
 		{
-			poll(Part.VARS, reader.vars());
+			poll(Part.VARS, reader.vars(schema));
 		}
 		if (profileUnsaved && tickCount % 100 == 0)
 		{
@@ -743,7 +744,7 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 			case LOCATION:
 				return reader.location();
 			case VARS:
-				return reader.vars();
+				return reader.vars(schema);
 			case STORAGE:
 				return storage.size() == 0 ? null : storage.toJson();
 			case KILL_COUNTS:
@@ -970,6 +971,18 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 			case TOO_LARGE:
 				budgetBytes = Math.max(16_000, budgetBytes / 2);
 				break;
+			case ACCOUNT_FULL:
+				// Nothing was stored. Keep the changes, and ask again rarely: the player may free a slot.
+				nextSendAtMillis = now + outcome.waitSeconds * 1_000L;
+				if (!announcedAccountFull)
+				{
+					announcedAccountFull = true;
+					chat("Your osrsindex.com account already tracks the most characters it can, so this one was not synced."
+						+ " Delete tracker data at osrsindex.com/account to make room.");
+				}
+				lastSync = ACCOUNT_FULL_LINE;
+				refreshPanel();
+				break;
 			case RETRY:
 			default:
 				nextSendAtMillis = now + outcome.waitSeconds * 1_000L;
@@ -991,8 +1004,12 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		schema = Part.LATEST_SCHEMA;
 		budgetBytes = PayloadPacker.DEFAULT_BUDGET_BYTES;
 		announcedFirstSync = false;
+		announcedAccountFull = false;
 		linkOfferedThisSession = false;
 	}
+
+	/** The panel's line while the account has no room for this character. */
+	static final String ACCOUNT_FULL_LINE = "Not synced: your account already tracks the most characters it can.";
 
 	/** The panel's last-sync line: "Last sync at 14:02: location, skills and bank." in the contract's order. */
 	static String syncSummary(LocalTime at, Set<Part> parts)
