@@ -5,14 +5,14 @@ import net.runelite.api.MenuAction;
 import net.runelite.client.util.Text;
 
 /**
- * The right-click "OSRS Index" entry: an item or NPC's Examine gains a sibling that opens the
- * site's search for that name in the browser. Nothing is sent from the client; the browser opens a public
- * page.
+ * The right-click "OSRS Wiki" entry: an item or NPC's Examine gains a sibling that opens the Old School
+ * RuneScape Wiki for that name in the browser. Nothing is sent from the client; the browser opens a public
+ * wiki page.
  */
 final class SiteLookup
 {
 	/** The menu option, shown before the item or NPC's own coloured name. */
-	static final String OPTION = "OSRS Index";
+	static final String OPTION = "OSRS Wiki";
 
 	private static final Pattern LEVEL = Pattern.compile("\\s*\\((?:level|skill)-\\d+\\)\\s*$", Pattern.CASE_INSENSITIVE);
 
@@ -48,7 +48,7 @@ final class SiteLookup
 	}
 
 	/**
-	 * A name as the game shows it, made fit for the site's search: no colour tags, no combat level, no
+	 * A name as the game shows it, made fit for the wiki's search: no colour tags, no combat level, no
 	 * hard spaces. Null when nothing useful is left, including the game's placeholder "null".
 	 */
 	static String cleanName(String name)

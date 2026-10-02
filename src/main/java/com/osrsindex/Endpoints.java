@@ -89,11 +89,17 @@ final class Endpoints
 		return origin() + "/map";
 	}
 
-	/** The site's search for a name, as a player would type it. */
-	static String search(String query)
+	/**
+	 * The Old School RuneScape Wiki's search for a name, as a player would type it. An exact page name
+	 * opens that page; anything else opens the wiki's results. Always the real wiki, never this site,
+	 * whatever origin is set for development.
+	 */
+	static String wikiSearch(String query)
 	{
-		return origin() + "/search?q=" + encode(query);
+		return WIKI_SEARCH + encode(query);
 	}
+
+	static final String WIKI_SEARCH = "https://oldschool.runescape.wiki/w/Special:Search?search=";
 
 	private static String encode(String value)
 	{

@@ -26,11 +26,34 @@ public class SiteLinksTest
 	}
 
 	@Test
-	public void aSearchEscapesTheName()
+	public void theLookupOpensTheRealWikiAndEscapesTheName()
 	{
-		assertEquals("https://osrsindex.com/search?q=Dragon%20scimitar", Endpoints.search("Dragon scimitar"));
-		assertEquals("https://osrsindex.com/search?q=Black%20d%27hide%20body", Endpoints.search("Black d'hide body"));
-		assertEquals("https://osrsindex.com/search?q=Fish%20%26%20chips%3F%23x", Endpoints.search("Fish & chips?#x"));
+		String wiki = "https://oldschool.runescape.wiki/w/Special:Search?search=";
+		assertEquals(wiki + "Dragon%20scimitar", Endpoints.wikiSearch("Dragon scimitar"));
+		assertEquals(wiki + "Black%20d%27hide%20body", Endpoints.wikiSearch("Black d'hide body"));
+		assertEquals(wiki + "Fish%20%26%20chips%3F%23x", Endpoints.wikiSearch("Fish & chips?#x"));
+	}
+
+	@Test
+	public void theLookupNeverPointsAtThisSiteEvenWithADevelopmentOrigin()
+	{
+		String previous = System.getProperty("osrsindex.origin");
+		System.setProperty("osrsindex.origin", "http://localhost:5173");
+		try
+		{
+			assertEquals("https://oldschool.runescape.wiki/w/Special:Search?search=Goblin", Endpoints.wikiSearch("Goblin"));
+		}
+		finally
+		{
+			if (previous == null)
+			{
+				System.clearProperty("osrsindex.origin");
+			}
+			else
+			{
+				System.setProperty("osrsindex.origin", previous);
+			}
+		}
 	}
 
 	@Test

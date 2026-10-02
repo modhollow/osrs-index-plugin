@@ -77,7 +77,7 @@ import org.slf4j.LoggerFactory;
  * <p>Nothing leaves the client until it is linked to an account: by a link code the player approves on
  * the site, which the panel's Link button opens with the code already in it, or by a pasted
  * token. Linked, the panel shows the last sync and opens the site's pages for the character, and items
- * and NPCs gain a right-click "OSRS Index" that opens the site's search ({@link SiteLookup}). Changes mark a part "dirty"; at most once every 30 seconds (the
+ * and NPCs gain a right-click "OSRS Wiki" that opens the OSRS Wiki for them ({@link SiteLookup}). Changes mark a part "dirty"; at most once every 30 seconds (the
  * server's per-token floor) the dirty parts are read fresh, packed under the body cap, and posted. A part
  * stays dirty until a response confirms it was stored, so a failed or refused sync loses nothing.
  *
@@ -96,7 +96,7 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 
 	static final String TOKEN_PREFIX = "osrsidx_";
 	/** This release, as build.gradle's {@code version} says; the plugin bus {@code hello} carries it. */
-	static final String VERSION = "0.2.0";
+	static final String VERSION = "0.3.0";
 	/** This plugin's id on the plugin bus (docs/plugin-bus.md), which is also its namespace there. */
 	static final String BUS_ID = "osrsindex";
 	private static final MediaType JSON = MediaType.parse("application/json");
@@ -556,7 +556,7 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		}
 	}
 
-	/** An item or NPC's Examine gains "OSRS Index", which opens the site's search for it. */
+	/** An item or NPC's Examine gains "OSRS Wiki", which opens the OSRS Wiki for it. */
 	@Subscribe
 	public void onMenuEntryAdded(MenuEntryAdded event)
 	{
@@ -589,7 +589,7 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		{
 			return;
 		}
-		String url = Endpoints.search(name);
+		String url = Endpoints.wikiSearch(name);
 		client.getMenu().createMenuEntry(-1)
 			.setOption(SiteLookup.OPTION)
 			.setTarget(event.getTarget())

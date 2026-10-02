@@ -1,7 +1,7 @@
 # OSRS Index
 
 A RuneLite plugin that syncs your character to your own [osrsindex.com](https://osrsindex.com) account, and brings
-the site into the game. Only you can see what it sends, on the site's home page and your character page.
+the site into the game. Only you can see what it sends, on your character page.
 
 **You need a free osrsindex.com account to link it.** Make one at [osrsindex.com/account](https://osrsindex.com/account)
 with just your email address: the site emails you a code, and the same code creates the account. An account tracks
@@ -13,7 +13,8 @@ up to 10 characters.
 - **Walk here from the site:** pick a place on osrsindex.com's map, and this client routes you there with Shortest
   Path.
 - **A panel** with your last sync and buttons to your character page, the map at your location and your account.
-- **Right-click lookups:** "OSRS Index" beside Examine on items and NPCs opens the site's search.
+- **Right-click wiki lookups:** "OSRS Wiki" beside Examine on items and NPCs opens that page on the Old School
+  RuneScape Wiki.
 
 ## Linking
 
@@ -86,9 +87,10 @@ on Shortest Path from the Plugin Hub.
 
 ## Right-click lookups
 
-**OSRS Index** appears beside **Examine** on items (inventory, worn equipment, the bank, other interfaces and the
-ground) and on NPCs. It opens osrsindex.com's search for that name in your browser. Nothing is sent from the client.
-Turn it off with **Right-click lookups** under *Look up on osrsindex.com* in the settings.
+**OSRS Wiki** appears beside **Examine** on items (inventory, worn equipment, the bank, other interfaces and the
+ground) and on NPCs. It opens that item or NPC on the [Old School RuneScape Wiki](https://oldschool.runescape.wiki) in
+your browser: an exact name opens its page, anything else the wiki's search results. Nothing is sent from the client.
+Turn it off with **Right-click lookups** under *Look up on the OSRS Wiki* in the settings.
 
 ## Chat messages
 

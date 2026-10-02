@@ -113,8 +113,8 @@ public interface OsrsIndexConfig extends Config
 	}
 
 	@ConfigSection(
-		name = "Look up on osrsindex.com",
-		description = "Open the site from the game's right-click menu.",
+		name = "Look up on the OSRS Wiki",
+		description = "Open the Old School RuneScape Wiki from the game's right-click menu.",
 		position = 9
 	)
 	String lookUp = "lookUp";
@@ -122,8 +122,8 @@ public interface OsrsIndexConfig extends Config
 	@ConfigItem(
 		keyName = "lookupMenu",
 		name = "Right-click lookups",
-		description = "Add \"OSRS Index\" beside Examine on items and NPCs. It opens osrsindex.com's search for that"
-			+ " name in your browser. Nothing is sent from the client.",
+		description = "Add \"OSRS Wiki\" beside Examine on items and NPCs. It opens that item or NPC on the Old"
+			+ " School RuneScape Wiki in your browser. Nothing is sent from the client.",
 		section = lookUp,
 		position = 10
 	)

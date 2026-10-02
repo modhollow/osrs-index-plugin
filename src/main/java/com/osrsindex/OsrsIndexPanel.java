@@ -116,7 +116,7 @@ class OsrsIndexPanel extends PluginPanel
 				+ (characterName == null ? "." : " as <b>" + escape(characterName) + "</b>.")));
 			code.setText(" ");
 			code.setVisible(false);
-			detail.setText(wrap("Only you can see it, on the home page and at osrsindex.com/tracker."));
+			detail.setText(wrap("Only you can see it, at osrsindex.com/tracker."));
 			sync.setText(wrap(lastSync == null ? "Nothing synced yet this session." : lastSync));
 			show(false, false, true);
 		});
