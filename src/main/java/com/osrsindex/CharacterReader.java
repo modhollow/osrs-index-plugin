@@ -4,7 +4,12 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 import javax.annotation.Nullable;
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -19,6 +24,7 @@ import net.runelite.api.Player;
 import net.runelite.api.Quest;
 import net.runelite.api.QuestState;
 import net.runelite.api.Skill;
+import net.runelite.api.WorldView;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.InventoryID;
 import net.runelite.api.gameval.DBTableID;
@@ -26,6 +32,8 @@ import net.runelite.api.gameval.ItemID;
 import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.client.game.ItemManager;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Reads each part of the character from the client, in the shape the contract names. Every method
@@ -35,6 +43,8 @@ import net.runelite.client.game.ItemManager;
 @Singleton
 class CharacterReader
 {
+	private static final Logger log = LoggerFactory.getLogger(CharacterReader.class);
+
 	static final int INVENTORY_SLOTS = 28;
 	static final int MAX_BANK_ITEMS = 2_000;
 	static final int MAX_ITEM_ID = 200_000;
@@ -111,6 +121,12 @@ class CharacterReader
 
 	private final Client client;
 	private final ItemManager itemManager;
+	/**
+	 * Var IDs the client threw on this session, almost always a wrong ID from a site's selection. Forgotten at the
+	 * login screen ({@link #forgetUnreadableVars}), so a read that failed once is tried again next session.
+	 */
+	private final Set<Integer> unreadableVarbits = new HashSet<>();
+	private final Set<Integer> unreadableVarps = new HashSet<>();
 
 	@Inject
 	CharacterReader(Client client, ItemManager itemManager)
@@ -258,12 +274,9 @@ class CharacterReader
 	{
 		JsonObject out = new JsonObject();
 		long total = 0;
+		// Only the real skills: Skill.OVERALL is a deprecated null, not one of the values.
 		for (Skill skill : Skill.values())
 		{
-			if (skill == Skill.OVERALL)
-			{
-				continue;
-			}
 			int xp = Math.max(0, Math.min(200_000_000, client.getSkillExperience(skill)));
 			int level = Math.max(1, Math.min(99, client.getRealSkillLevel(skill)));
 			total += xp;
@@ -356,7 +369,8 @@ class CharacterReader
 		{
 			return null;
 		}
-		WorldPoint point = client.isInInstancedRegion()
+		WorldView view = client.getTopLevelWorldView();
+		WorldPoint point = view != null && view.isInstance()
 			? WorldPoint.fromLocalInstance(client, player.getLocalLocation())
 			: player.getWorldLocation();
 		if (point == null || point.getX() < 0 || point.getX() > 16_383 || point.getY() < 0 || point.getY() > 16_383
@@ -378,17 +392,57 @@ class CharacterReader
 
 	// --- sections (schema 3) -----------------------------------------------
 
+	/** Try every var again: called at the login screen, when the next login may be another account. */
+	void forgetUnreadableVars()
+	{
+		unreadableVarbits.clear();
+		unreadableVarps.clear();
+	}
+
 	/** Numeric gamevals remain schema 3 compatible; schema 4 adds a client-resolved live Slayer task. */
 	JsonObject vars(int schema)
 	{
+		return vars(schema, SiteConfig.Vars.BUILT_IN);
+	}
+
+	/**
+	 * The vars {@code selection} names: the built-in list, or the site's ({@link SiteConfig.Vars}). An ID the
+	 * client cannot read is left out for the rest of the session, so it costs one failed read, not one a poll.
+	 */
+	JsonObject vars(int schema, SiteConfig.Vars selection)
+	{
 		JsonObject out = new JsonObject();
-		for (int i = 0; i < GameVars.VARBIT_IDS.length; i++)
+		for (int i = 0; i < selection.varbitIds.length; i++)
 		{
-			out.addProperty(GameVars.VARBIT_NAMES[i], client.getVarbitValue(GameVars.VARBIT_IDS[i]));
+			int id = selection.varbitIds[i];
+			if (!unreadableVarbits.contains(id))
+			{
+				try
+				{
+					out.addProperty(selection.varbitNames[i], client.getVarbitValue(id));
+				}
+				catch (RuntimeException e)
+				{
+					unreadableVarbits.add(id);
+					log.debug("OSRS Index: varbit {} ({}) cannot be read; leaving it out", id, selection.varbitNames[i]);
+				}
+			}
 		}
-		for (int i = 0; i < GameVars.VARP_IDS.length; i++)
+		for (int i = 0; i < selection.varpIds.length; i++)
 		{
-			out.addProperty(GameVars.VARP_NAMES[i], client.getVarpValue(GameVars.VARP_IDS[i]));
+			int id = selection.varpIds[i];
+			if (!unreadableVarps.contains(id))
+			{
+				try
+				{
+					out.addProperty(selection.varpNames[i], client.getVarpValue(id));
+				}
+				catch (RuntimeException e)
+				{
+					unreadableVarps.add(id);
+					log.debug("OSRS Index: varp {} ({}) cannot be read; leaving it out", id, selection.varpNames[i]);
+				}
+			}
 		}
 		if (schema >= 4)
 		{
@@ -401,70 +455,168 @@ class CharacterReader
 		return out;
 	}
 
+	/**
+	 * The two DB table reads the Slayer lookup makes. The client answers them in game; a unit test answers them
+	 * itself, so the lookup can be checked against empty, mistyped and missing fields without a client.
+	 */
+	interface DbTables
+	{
+		List<Integer> rowsByValue(int table, int column, int tupleIndex, Object value);
+
+		Object[] field(int row, int column, int tupleIndex);
+	}
+
+	/** SLAYER_TARGET's value for a boss task, whose boss is named through the SlayerTaskSublist table. */
+	static final int BOSS_TASK_ID = 98;
+
+	/** The client's DB tables. Read lazily, so it is safe to build before the constructor sets the client. */
+	private final DbTables clientTables = new DbTables()
+	{
+		@Override
+		public List<Integer> rowsByValue(int table, int column, int tupleIndex, Object value)
+		{
+			return client.getDBRowsByValue(table, column, tupleIndex, value);
+		}
+
+		@Override
+		public Object[] field(int row, int column, int tupleIndex)
+		{
+			return client.getDBTableField(row, column, tupleIndex);
+		}
+	};
+
+	/** Set once a failed Slayer lookup is logged, so a broken table logs once and not on every poll. */
+	private boolean slayerLookupFailureLogged;
+
 	/** RuneLite's own Slayer plugin resolves the same task and area DB rows. Unknown rows stay unknown. */
 	@Nullable
 	private String currentSlayerTaskName()
 	{
-		int taskId = client.getVarpValue(VarPlayerID.SLAYER_TARGET);
-		int row;
-		if (taskId == 98) // Boss task sublist, as in RuneLite SlayerPlugin.
-		{
-			var rows = client.getDBRowsByValue(DBTableID.SlayerTaskSublist.ID,
-				DBTableID.SlayerTaskSublist.COL_TASK_SUBTABLE_ID, 0,
-				client.getVarbitValue(VarbitID.SLAYER_TARGET_BOSSID));
-			if (rows.isEmpty())
-			{
-				return null;
-			}
-			row = (Integer) client.getDBTableField(rows.get(0), DBTableID.SlayerTaskSublist.COL_TASK, 0)[0];
-		}
-		else
-		{
-			var rows = client.getDBRowsByValue(DBTableID.SlayerTask.ID, DBTableID.SlayerTask.COL_ID, 0, taskId);
-			if (rows.isEmpty())
-			{
-				return null;
-			}
-			row = rows.get(0);
-		}
-		Object[] fields = client.getDBTableField(row, DBTableID.SlayerTask.COL_NAME_UPPERCASE, 0);
-		return fields.length > 0 && fields[0] instanceof String ? (String) fields[0] : null;
+		return guardSlayerLookup(() -> slayerTaskName(clientTables, client.getVarpValue(VarPlayerID.SLAYER_TARGET),
+			client.getVarbitValue(VarbitID.SLAYER_TARGET_BOSSID)), this::slayerLookupFailed);
 	}
 
 	@Nullable
 	private String currentSlayerAreaName()
 	{
-		int areaId = client.getVarpValue(VarPlayerID.SLAYER_AREA);
+		return guardSlayerLookup(() -> slayerAreaName(clientTables, client.getVarpValue(VarPlayerID.SLAYER_AREA)),
+			this::slayerLookupFailed);
+	}
+
+	private void slayerLookupFailed(RuntimeException e)
+	{
+		if (!slayerLookupFailureLogged)
+		{
+			slayerLookupFailureLogged = true;
+			log.debug("OSRS Index could not read the Slayer task's name or area from the game's tables; left out", e);
+		}
+	}
+
+	/**
+	 * Runs one Slayer lookup. vars() runs on the client thread ahead of every sync, so a runtime exception here, for
+	 * example from a table a game update has reshaped, must leave the value unknown rather than stop every sync for
+	 * as long as the task lasts. The exception goes to onFailure.
+	 */
+	@Nullable
+	static String guardSlayerLookup(Supplier<String> lookup, Consumer<RuntimeException> onFailure)
+	{
+		try
+		{
+			return lookup.get();
+		}
+		catch (RuntimeException e)
+		{
+			onFailure.accept(e);
+			return null;
+		}
+	}
+
+	/**
+	 * The task's name, or null when a row is missing or a field is empty or of another type. A boss task finds its
+	 * SlayerTask row through the SlayerTaskSublist table first, as RuneLite's own Slayer plugin does.
+	 */
+	@Nullable
+	static String slayerTaskName(DbTables tables, int taskId, int bossId)
+	{
+		Integer row;
+		if (taskId == BOSS_TASK_ID)
+		{
+			Integer sublistRow = firstRow(tables.rowsByValue(DBTableID.SlayerTaskSublist.ID,
+				DBTableID.SlayerTaskSublist.COL_TASK_SUBTABLE_ID, 0, bossId));
+			row = sublistRow == null ? null
+				: firstValue(tables.field(sublistRow, DBTableID.SlayerTaskSublist.COL_TASK, 0), Integer.class);
+		}
+		else
+		{
+			row = firstRow(tables.rowsByValue(DBTableID.SlayerTask.ID, DBTableID.SlayerTask.COL_ID, 0, taskId));
+		}
+		return row == null ? null
+			: firstValue(tables.field(row, DBTableID.SlayerTask.COL_NAME_UPPERCASE, 0), String.class);
+	}
+
+	/** The task's area name, or null when it has none, its row is missing or the field is empty or of another type. */
+	@Nullable
+	static String slayerAreaName(DbTables tables, int areaId)
+	{
 		if (areaId <= 0)
 		{
 			return null;
 		}
-		var rows = client.getDBRowsByValue(DBTableID.SlayerArea.ID, DBTableID.SlayerArea.COL_AREA_ID, 0, areaId);
-		if (rows.isEmpty())
-		{
-			return null;
-		}
-		Object[] fields = client.getDBTableField(rows.get(0), DBTableID.SlayerArea.COL_AREA_NAME_IN_HELPER, 0);
-		return fields.length > 0 && fields[0] instanceof String ? (String) fields[0] : null;
+		Integer row = firstRow(tables.rowsByValue(DBTableID.SlayerArea.ID, DBTableID.SlayerArea.COL_AREA_ID, 0, areaId));
+		return row == null ? null
+			: firstValue(tables.field(row, DBTableID.SlayerArea.COL_AREA_NAME_IN_HELPER, 0), String.class);
 	}
 
-	/** Shared with the unit test: a zero count, invalid name or missing DB row must not create a task. */
+	@Nullable
+	private static Integer firstRow(@Nullable List<Integer> rows)
+	{
+		return rows == null || rows.isEmpty() ? null : rows.get(0);
+	}
+
+	/** A DB field's first value when it is of the expected type, else null. */
+	@Nullable
+	private static <T> T firstValue(@Nullable Object[] fields, Class<T> type)
+	{
+		return fields != null && fields.length > 0 && type.isInstance(fields[0]) ? type.cast(fields[0]) : null;
+	}
+
+	/**
+	 * Shared with the unit test: a zero count, invalid name or missing DB row must not create a task. Both names are
+	 * normalised first, so a real task padded with a hard space is kept rather than dropped.
+	 */
 	static void addSlayerAssignment(JsonObject out, int schema, int remaining, @Nullable String name, @Nullable String area)
 	{
-		if (schema < 4 || remaining <= 0 || !validSlayerText(name))
+		String task = normaliseSlayerText(name);
+		if (schema < 4 || remaining <= 0 || !validSlayerText(task))
 		{
 			return;
 		}
-		out.addProperty("SLAYER_TASK_NAME", name);
-		if (validSlayerText(area))
+		out.addProperty("SLAYER_TASK_NAME", task);
+		String place = normaliseSlayerText(area);
+		if (validSlayerText(place))
 		{
-			out.addProperty("SLAYER_TASK_AREA", area);
+			out.addProperty("SLAYER_TASK_AREA", place);
 		}
 	}
 
-	private static boolean validSlayerText(@Nullable String text)
+	/**
+	 * The game writes hard spaces (U+00A0) in some strings, as it does in player names. They become plain spaces, and
+	 * then the ends are stripped with the set JavaScript's trim() uses, which is the set the site checks against.
+	 */
+	@Nullable
+	static String normaliseSlayerText(@Nullable String text)
 	{
-		if (text == null || text.isEmpty() || text.length() > 80 || !text.trim().equals(text))
+		return text == null ? null : scriptTrim(text.replace('\u00A0', ' '));
+	}
+
+	/**
+	 * The site refuses a name unless {@code value.trim() === value} holds in JavaScript, and one refused name costs
+	 * the whole body. Java's trim() strips only U+0000 to U+0020, so a name ending in a hard space or a byte order
+	 * mark passed here and failed there. This checks with the site's set and its other rules instead.
+	 */
+	static boolean validSlayerText(@Nullable String text)
+	{
+		if (text == null || text.isEmpty() || text.length() > 80 || !scriptTrim(text).equals(text))
 		{
 			return false;
 		}
@@ -477,6 +629,33 @@ class CharacterReader
 			}
 		}
 		return true;
+	}
+
+	/** JavaScript's String.prototype.trim: strips every {@link #isScriptTrimmed} character from both ends. */
+	static String scriptTrim(String text)
+	{
+		int start = 0;
+		int end = text.length();
+		while (start < end && isScriptTrimmed(text.charAt(start)))
+		{
+			start++;
+		}
+		while (end > start && isScriptTrimmed(text.charAt(end - 1)))
+		{
+			end--;
+		}
+		return text.substring(start, end);
+	}
+
+	/**
+	 * ECMAScript's WhiteSpace and LineTerminator characters, the set its trim() removes: tab, line feed, vertical tab,
+	 * form feed, carriage return, the Unicode space separators (U+0020, U+00A0, U+1680, U+2000 to U+200A, U+202F,
+	 * U+205F, U+3000), the line and paragraph separators (U+2028, U+2029) and the byte order mark (U+FEFF).
+	 */
+	static boolean isScriptTrimmed(char c)
+	{
+		return (c >= 0x09 && c <= 0x0d) || c == 0x20 || c == 0xa0 || c == 0x1680 || (c >= 0x2000 && c <= 0x200a)
+			|| c == 0x2028 || c == 0x2029 || c == 0x202f || c == 0x205f || c == 0x3000 || c == 0xfeff;
 	}
 
 	/** The occupied Grand Exchange slots. Null before the offers have loaded. */

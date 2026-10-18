@@ -94,6 +94,8 @@ final class AccountLinker
 	private volatile boolean earlyPollWanted;
 	private volatile int intervalSeconds = DEFAULT_INTERVAL_SECONDS;
 	private volatile boolean inFlight;
+	/** The site's text for the player with its last answer ({@code player_message}), or null. */
+	private volatile String playerMessage;
 
 	AccountLinker(OkHttpClient http, Gson gson, Listener listener)
 	{
@@ -117,6 +119,15 @@ final class AccountLinker
 		return userCode;
 	}
 
+	/**
+	 * What the site said to the player with its last answer, made safe ({@link SiteConfig#playerText}), or null. The
+	 * panel shows it in place of its own line for an expired, unavailable or full link.
+	 */
+	String playerMessage()
+	{
+		return playerMessage;
+	}
+
 	/** The site's approval page with the waiting code in it, or null when no code is waiting. */
 	String approvalUrl()
 	{
@@ -132,12 +143,14 @@ final class AccountLinker
 		}
 		JsonObject body = new JsonObject();
 		body.addProperty("character", character);
+		playerMessage = null;
 		set(State.STARTING, null);
 		inFlight = true;
 		recordRequest(clock.getAsLong());
 		transport.post(Endpoints.linkStart(), body, (status, json) ->
 		{
 			inFlight = false;
+			playerMessage = SiteConfig.playerMessage(json);
 			if (status == 200 && json != null && json.has("device_code") && json.has("user_code"))
 			{
 				long now = clock.getAsLong();
@@ -210,6 +223,8 @@ final class AccountLinker
 		}
 		if (now > expiresAtMillis)
 		{
+			// Expired here, not by an answer: the site's last words are about something else.
+			playerMessage = null;
 			set(State.EXPIRED, null);
 			return;
 		}
@@ -236,6 +251,7 @@ final class AccountLinker
 		transport.post(Endpoints.linkPoll(), body, (status, json) ->
 		{
 			inFlight = false;
+			playerMessage = SiteConfig.playerMessage(json);
 			nextPollAtMillis = clock.getAsLong() + intervalSeconds * 1_000L;
 			String result = json != null && json.has("status") ? json.get("status").getAsString() : "";
 			String code = json != null && json.has("code") ? json.get("code").getAsString() : "";
@@ -308,7 +324,11 @@ final class AccountLinker
 		listener.stateChanged(next, code);
 	}
 
-	private static Transport okHttp(OkHttpClient http, Gson gson)
+	/**
+	 * The transport the plugin links with: a JSON POST through {@code http}. The plugin passes its
+	 * {@link SiteHttp} client, so link start and every poll name the plugin's version.
+	 */
+	static Transport okHttp(OkHttpClient http, Gson gson)
 	{
 		return (url, body, handler) ->
 		{

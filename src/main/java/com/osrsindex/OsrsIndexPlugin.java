@@ -5,9 +5,6 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.inject.Provides;
-import java.awt.Color;
-import java.awt.Graphics2D;
-import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.time.Clock;
@@ -18,6 +15,8 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumMap;
+import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -29,16 +28,12 @@ import javax.inject.Inject;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
-import net.runelite.api.MenuAction;
-import net.runelite.api.MenuEntry;
-import net.runelite.api.NPC;
 import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.FocusChanged;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.GrandExchangeOfferChanged;
 import net.runelite.api.events.ItemContainerChanged;
-import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.api.events.ScriptPreFired;
 import net.runelite.api.events.StatChanged;
 import net.runelite.api.events.VarbitChanged;
@@ -52,12 +47,12 @@ import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.events.PluginMessage;
-import net.runelite.client.game.ItemManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.plugins.PluginManager;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
+import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.LinkBrowser;
 import net.runelite.client.util.Text;
 import okhttp3.Call;
@@ -76,14 +71,18 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Nothing leaves the client until it is linked to an account: by a link code the player approves on
  * the site, which the panel's Link button opens with the code already in it, or by a pasted
- * token. Linked, the panel shows the last sync and opens the site's pages for the character, and items
- * and NPCs gain a right-click "OSRS Wiki" that opens the OSRS Wiki for them ({@link SiteLookup}). Changes mark a part "dirty"; at most once every 30 seconds (the
- * server's per-token floor) the dirty parts are read fresh, packed under the body cap, and posted. A part
- * stays dirty until a response confirms it was stored, so a failed or refused sync loses nothing.
+ * token. Linked, the panel shows the last sync and opens the site's pages for the character. Changes mark a part
+ * "dirty"; at most once every 30 seconds (the server's per-token floor) the dirty parts are read fresh, packed under
+ * the body cap, and posted. A part stays dirty until a response confirms it was stored, so a failed or refused sync
+ * loses nothing.
  *
  * <p>With "Receive destinations" on, the default, it also holds a socket to osrsindex.com's relay: a place the
  * player sends from the site's map is handed to Shortest Path at once ({@link DestinationSocket},
  * {@link DestinationReceiver}).
+ *
+ * <p>Linked, it also reads what osrsindex.com asks of it ({@link SiteConfig}, docs/site-config.md): waits and
+ * limits, parts to pause, which vars to send and a notice for the panel, so the site can change those without a
+ * plugin release. Without that config, or before it arrives, the plugin keeps its built-in values.
  */
 @PluginDescriptor(
 	name = "OSRS Index",
@@ -96,22 +95,18 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 
 	static final String TOKEN_PREFIX = "osrsidx_";
 	/** This release, as build.gradle's {@code version} says; the plugin bus {@code hello} carries it. */
-	static final String VERSION = "0.3.0";
+	static final String VERSION = "0.4.0";
 	/** This plugin's id on the plugin bus (docs/plugin-bus.md), which is also its namespace there. */
 	static final String BUS_ID = "osrsindex";
 	private static final MediaType JSON = MediaType.parse("application/json");
 	private static final String CLOG_ITEMS_KEY = "collectionLogItems";
 	private static final String KILL_COUNTS_KEY = "killCounts";
 	private static final String STORAGE_KEY = "storage";
+	/** When the stores and kill counts above last changed ({@link PartTimes}). Not "sync...": that prefix resends. */
+	private static final String PART_TIMES_KEY = "partTimes";
 
 	/** Client script run once per item as a collection log page draws: (_, itemId, quantity, ...). */
 	static final int COLLECTION_LOG_DRAW_ITEM_SCRIPT = 4100;
-
-	/** Varbit-backed parts are cheap to read; compare them this often. */
-	private static final int POLL_EVERY_TICKS = 5;
-
-	/** The var allowlist is ~2,200 reads; compare it less often. */
-	private static final int POLL_VARS_EVERY_TICKS = 25;
 
 	/** Let stats, varps and the player name arrive before the first read after login. */
 	private static final int LOGIN_SETTLE_TICKS = 3;
@@ -131,8 +126,12 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 	@Inject
 	private CharacterReader reader;
 
+	/** RuneLite's shared client. Other plugins use it too, so requests go through {@link #siteHttp}, derived from it. */
 	@Inject
 	private OkHttpClient httpClient;
+
+	/** Every request to osrsindex.com goes through this, so each one names this plugin's version ({@link SiteHttp}). */
+	private OkHttpClient siteHttp;
 
 	@Inject
 	private Gson gson;
@@ -149,12 +148,11 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 	@Inject
 	private ScheduledExecutorService executor;
 
-	@Inject
-	private ItemManager itemManager;
-
 	private final CollectionLogTracker collectionLog = new CollectionLogTracker();
 	private final KillCountTracker killCounts = new KillCountTracker();
 	private final StorageTracker storage = new StorageTracker();
+	/** When the bank was read and the stores and kill counts last changed, for schema 5's {@code captured}. */
+	private final PartTimes partTimes = new PartTimes();
 
 	/** Part -> change stamp. A part is removed only when a response stored that exact stamp. */
 	private final Map<Part, Long> dirty = new EnumMap<>(Part.class);
@@ -184,13 +182,29 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 	private volatile String panelCharacter;
 	private volatile String lastSync;
 
+	/**
+	 * What osrsindex.com asks of this client: the built-in values until it answers. Varbit-backed parts are cheap
+	 * to read and are compared every {@code pollTicks}; the vars, ~2,200 reads, every {@code pollVarsTicks}.
+	 */
+	private volatile SiteConfig siteConfig = SiteConfig.DEFAULTS;
+	private SiteConfigFetcher siteConfigFetcher;
+	/** The notices already put in chat while the client runs, by id. */
+	private final Set<String> chattedNotices = new HashSet<>();
+	/** The last site message chat showed for a wait, so the same one is not repeated on every retry. */
+	private String lastWaitMessage;
+
+	/** The highest schema the site has not refused this session; {@link #sendSchema} also caps it by the config. */
 	private int schema = Part.LATEST_SCHEMA;
 	private int budgetBytes = PayloadPacker.DEFAULT_BUDGET_BYTES;
+	/** False once the site refused the part times this session (invalid_captured): bodies then go out undated. */
+	private boolean sendPartTimes = true;
 	private boolean inFlight;
 	private long nextSendAtMillis;
 	private String rejectedToken;
 	private boolean announcedFirstSync;
 	private boolean announcedAccountFull;
+	/** Parts the site refused alone as too large this session, so each is logged once, not on every change. */
+	private final Set<Part> warnedTooLarge = EnumSet.noneOf(Part.class);
 
 	@Provides
 	OsrsIndexConfig provideConfig(ConfigManager configManager)
@@ -201,7 +215,10 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 	@Override
 	protected void startUp()
 	{
-		linker = new AccountLinker(httpClient, gson, this);
+		siteHttp = SiteHttp.derive(httpClient, VERSION);
+		siteConfig = SiteConfig.DEFAULTS;
+		siteConfigFetcher = new SiteConfigFetcher(siteHttp, next -> clientThread.invoke(() -> applySiteConfig(next)));
+		linker = new AccountLinker(siteHttp, gson, this);
 		panel = new OsrsIndexPanel(this);
 		navigationButton = NavigationButton.builder()
 			.tooltip("OSRS Index")
@@ -219,7 +236,7 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 
 		RouteDispatcher dispatcher = new RouteDispatcher(eventBus::post, RouteDispatcher.activeIn(pluginManager),
 			Clock.systemUTC());
-		destinationSocket = new DestinationSocket(new OkHttpConnector(httpClient, Endpoints::destinations), this::schedule,
+		destinationSocket = new DestinationSocket(new OkHttpConnector(siteHttp, Endpoints::destinations), this::schedule,
 			new Random(), destination -> clientThread.invokeLater(() -> destinationReceiver.accept(destination)),
 			this::showDestinationStatus);
 		// Always Shortest Path, never Farm Route Planner.
@@ -281,29 +298,24 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		{
 			case WAITING:
 				panel.showCode(userCode);
+				// A code comes only from the player's own click, which also asked for the approval page.
 				if (open)
 				{
 					LinkBrowser.browse(linker.approvalUrl());
-					chat("Approve this client in your browser. The page shows the code " + userCode + ". After you "
-						+ "approve, linking takes up to about 15 seconds.");
 				}
-				else
-				{
-					chat("Link this client to your osrsindex.com account: click Link with osrsindex.com in the "
-						+ "OSRS Index panel, then approve it on the site. Nothing to type, and it links within about "
-						+ "15 seconds of approving.");
-				}
+				chat("Approve this client in your browser. The page shows the code " + userCode + ". After you "
+					+ "approve, linking takes up to about 15 seconds.");
 				break;
 			case EXPIRED:
-				panel.showNotLinked("The link code expired. Click Link with osrsindex.com to get a new one.");
+				panel.showNotLinked(linkLine("The link code expired. Click Link with osrsindex.com to get a new one."));
 				break;
 			case UNAVAILABLE:
-				panel.showNotLinked("osrsindex.com cannot link by code right now. Create a token on your "
-					+ "account page and paste it into this plugin's settings instead.");
+				panel.showNotLinked(linkLine("osrsindex.com cannot link by code right now. Create a token on your "
+					+ "account page and paste it into this plugin's settings instead."));
 				break;
 			case TOO_MANY_TOKENS:
-				panel.showNotLinked("Your account already has 5 linked clients. Revoke one on your account page, "
-					+ "then get a new code.");
+				panel.showNotLinked(linkLine("Your account already has 5 linked clients. Revoke one on your account "
+					+ "page, then get a new code."));
 				break;
 			case IDLE:
 			case STARTING:
@@ -311,6 +323,13 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 				refreshPanel();
 				break;
 		}
+	}
+
+	/** The site's own line for the link's last answer, escaped for the panel, or this plugin's {@code fallback}. */
+	private String linkLine(String fallback)
+	{
+		String site = linker.playerMessage();
+		return site == null ? fallback : OsrsIndexPanel.escape(site);
 	}
 
 	@Override
@@ -367,13 +386,25 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		});
 	}
 
+	/**
+	 * Unlink this client: ask the site to revoke the token, so it stops counting toward the account's 5
+	 * linked clients, then forget it here without waiting for the answer, so unlinking works offline.
+	 * A second chat line says whether the site confirmed it ({@link TokenRevoker}).
+	 */
 	@Override
 	public void unlink()
 	{
+		String token = token();
 		lastSync = null;
-		configManager.unsetConfiguration(OsrsIndexConfig.GROUP, "token");
+		// This line first, so it is never queued behind the answer's line.
 		chat("Unlinked. Nothing more is sent until you link again. To remove what was sent, use "
 			+ "\"Delete tracker data\" on your account page.");
+		// A token not in the site's form was never sent, so the site has nothing to revoke.
+		if (token.startsWith(TOKEN_PREFIX))
+		{
+			new TokenRevoker(siteHttp).revoke(token, result -> chat(TokenRevoker.chatLine(result)));
+		}
+		configManager.unsetConfiguration(OsrsIndexConfig.GROUP, "token");
 		refreshPanel();
 	}
 
@@ -397,20 +428,26 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		}
 	}
 
-	/** Offer a code once per session when the client is not linked, so linking needs no setup at all. */
+	/**
+	 * Once per session, when the client is not linked, say in chat how to link it. This sends nothing: an unlinked
+	 * client makes no request to osrsindex.com until the player clicks Link with osrsindex.com in the panel.
+	 */
 	private void maybeOfferLink()
 	{
 		if (!token().isEmpty() || linkOfferedThisSession || linker.state() != AccountLinker.State.IDLE)
 		{
 			return;
 		}
-		String character = reader.characterName();
-		if (character != null)
+		if (reader.characterName() != null)
 		{
 			linkOfferedThisSession = true;
-			linker.start(character);
+			chat(LINK_HINT);
 		}
 	}
+
+	/** The once-a-session line for an unlinked client. */
+	static final String LINK_HINT = "This client is not linked to osrsindex.com, so nothing is sent. To link it, click"
+		+ " Link with osrsindex.com in the OSRS Index panel.";
 
 	// --- events ------------------------------------------------------------
 
@@ -459,6 +496,12 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 			rejectedToken = null;
 			nextSendAtMillis = 0;
 			schema = Part.LATEST_SCHEMA;
+			lastWaitMessage = null;
+			if (token().isEmpty())
+			{
+				// Unlinked: the site's config was for that link. A new token asks for its own on the next tick.
+				siteConfigFetcher.tick("");
+			}
 			clientThread.invoke(this::markAllDirty);
 			refreshPanel();
 			updateDestinations(true);
@@ -489,10 +532,11 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		}
 		else if (id == InventoryID.BANK)
 		{
-			// Readable only while open, so capture it now rather than at send time.
+			// Readable only while open, so capture it now rather than at send time, and keep when.
 			capturedBank = reader.bank();
 			if (capturedBank != null)
 			{
+				partTimes.mark(Part.BANK, Instant.now());
 				markDirty(Part.BANK);
 			}
 		}
@@ -504,6 +548,7 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 				JsonArray items = reader.items(id, CharacterReader.MAX_BANK_ITEMS);
 				if (profileLoaded && storage.put(store, items))
 				{
+					partTimes.mark(Part.STORAGE, Instant.now());
 					profileUnsaved = true;
 					markDirty(Part.STORAGE);
 				}
@@ -541,6 +586,7 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		}
 		if (profileLoaded && killCounts.offer(Text.removeTags(event.getMessage())))
 		{
+			partTimes.mark(Part.KILL_COUNTS, Instant.now());
 			profileUnsaved = true;
 			markDirty(Part.KILL_COUNTS);
 		}
@@ -554,48 +600,6 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		{
 			linker.pollSoon();
 		}
-	}
-
-	/** An item or NPC's Examine gains "OSRS Wiki", which opens the OSRS Wiki for it. */
-	@Subscribe
-	public void onMenuEntryAdded(MenuEntryAdded event)
-	{
-		if (!config.lookupMenu())
-		{
-			return;
-		}
-		MenuEntry entry = event.getMenuEntry();
-		int itemId = event.getItemId();
-		if (itemId <= 0 && entry.getWidget() != null)
-		{
-			itemId = entry.getWidget().getItemId();
-		}
-		String name;
-		switch (SiteLookup.kindOf(event.getOption(), entry.getType(), itemId))
-		{
-			case ITEM:
-				int id = entry.getType() == MenuAction.EXAMINE_ITEM_GROUND ? event.getIdentifier() : itemId;
-				name = SiteLookup.cleanName(itemManager.getItemComposition(itemManager.canonicalize(id)).getMembersName());
-				break;
-			case NPC:
-				NPC npc = entry.getNpc();
-				name = npc == null ? null : SiteLookup.cleanName(npc.getName());
-				break;
-			case NONE:
-			default:
-				return;
-		}
-		if (name == null)
-		{
-			return;
-		}
-		String url = Endpoints.wikiSearch(name);
-		client.getMenu().createMenuEntry(-1)
-			.setOption(SiteLookup.OPTION)
-			.setTarget(event.getTarget())
-			.setType(MenuAction.RUNELITE)
-			.setDeprioritized(true)
-			.onClick(clicked -> LinkBrowser.browse(url));
 	}
 
 	@Subscribe
@@ -636,15 +640,17 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 
 		maybeOfferLink();
 		linker.tick();
+		siteConfigFetcher.tick(token());
 		readOpenCollectionLogPage();
 		tickCount++;
-		if (tickCount % POLL_EVERY_TICKS == 0)
+		SiteConfig site = siteConfig;
+		if (tickCount % site.timing.pollTicks == 0)
 		{
 			pollForChanges();
 		}
-		if (tickCount % POLL_VARS_EVERY_TICKS == 0)
+		if (tickCount % site.timing.pollVarsTicks == 0)
 		{
-			poll(Part.VARS, reader.vars(schema));
+			poll(Part.VARS, reader.vars(sendSchema(), site.vars));
 		}
 		if (profileUnsaved && tickCount % 100 == 0)
 		{
@@ -691,7 +697,13 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		}
 	}
 
+	/** The player has the part on, and the site has not paused it: the site can only ever pause more. */
 	private boolean enabled(Part part)
+	{
+		return siteConfig.allows(part) && playerEnabled(part);
+	}
+
+	private boolean playerEnabled(Part part)
 	{
 		switch (part)
 		{
@@ -719,7 +731,7 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		}
 	}
 
-	private JsonElement read(Part part)
+	private JsonElement read(Part part, int sendSchema)
 	{
 		switch (part)
 		{
@@ -744,7 +756,7 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 			case LOCATION:
 				return reader.location();
 			case VARS:
-				return reader.vars(schema);
+				return reader.vars(sendSchema, siteConfig.vars);
 			case STORAGE:
 				return storage.size() == 0 ? null : storage.toJson();
 			case KILL_COUNTS:
@@ -819,6 +831,7 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 			collectionLog.load(configManager.getRSProfileConfiguration(OsrsIndexConfig.GROUP, CLOG_ITEMS_KEY));
 			killCounts.load(configManager.getRSProfileConfiguration(OsrsIndexConfig.GROUP, KILL_COUNTS_KEY));
 			storage.load(configManager.getRSProfileConfiguration(OsrsIndexConfig.GROUP, STORAGE_KEY));
+			partTimes.load(configManager.getRSProfileConfiguration(OsrsIndexConfig.GROUP, PART_TIMES_KEY));
 			profileLoaded = true;
 		}
 	}
@@ -830,6 +843,7 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 			configManager.setRSProfileConfiguration(OsrsIndexConfig.GROUP, CLOG_ITEMS_KEY, gson.toJson(collectionLog.toJson()));
 			configManager.setRSProfileConfiguration(OsrsIndexConfig.GROUP, KILL_COUNTS_KEY, gson.toJson(killCounts.toJson()));
 			configManager.setRSProfileConfiguration(OsrsIndexConfig.GROUP, STORAGE_KEY, gson.toJson(storage.toJson()));
+			configManager.setRSProfileConfiguration(OsrsIndexConfig.GROUP, PART_TIMES_KEY, gson.toJson(partTimes.toJson()));
 			profileUnsaved = false;
 		}
 	}
@@ -852,21 +866,24 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 			return;
 		}
 		String character = reader.characterName();
-		if (character == null)
+		if (character == null || siteConfigFetcher.awaitingFirstAnswer() || siteConfig != siteConfigFetcher.current())
 		{
+			// The first sync waits briefly for the site's config, so a part it paused does not go out first. A config
+			// that has come but is not applied yet is applied on this thread before the next tick.
 			return;
 		}
 
+		int sendSchema = sendSchema();
 		Map<Part, JsonElement> pending = new EnumMap<>(Part.class);
 		Map<Part, Long> stamps = new EnumMap<>(Part.class);
 		for (Map.Entry<Part, Long> entry : dirty.entrySet())
 		{
 			Part part = entry.getKey();
-			if (!enabled(part) || part.minSchema > schema)
+			if (!enabled(part) || part.minSchema > sendSchema)
 			{
 				continue;
 			}
-			JsonElement value = read(part);
+			JsonElement value = read(part, sendSchema);
 			if (value != null)
 			{
 				pending.put(part, value);
@@ -874,31 +891,46 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 			}
 		}
 		String capturedAt = Instant.now().truncatedTo(ChronoUnit.SECONDS).toString();
-		PayloadPacker.Packed packed = PayloadPacker.pack(gson, schema, character, capturedAt, pending, budgetBytes);
+		Map<Part, Instant> times = sendPartTimes ? partTimes.asMap() : Collections.<Part, Instant>emptyMap();
+		PayloadPacker.Packed packed = PayloadPacker.pack(gson, sendSchema, character, capturedAt, pending, times,
+			budgetBytes);
 		if (packed == null)
 		{
 			return;
 		}
 
 		inFlight = true;
-		post(token, packed, stamps);
+		post(token, packed, stamps, sendSchema);
 	}
 
-	private void post(String token, PayloadPacker.Packed packed, Map<Part, Long> stamps)
+	/** The schema to send: the highest the site has not refused, and no higher than its config allows. */
+	private int sendSchema()
 	{
-		Request request = new Request.Builder()
+		return Math.min(schema, siteConfig.maxSchema);
+	}
+
+	/** One sync: the body to the sync endpoint, with the token as a bearer. {@link #siteHttp} adds the version. */
+	static Request syncRequest(String token, String json)
+	{
+		return new Request.Builder()
 			.url(Endpoints.sync())
 			.header("Authorization", "Bearer " + token)
-			.post(RequestBody.create(JSON, packed.json))
+			.post(RequestBody.create(JSON, json))
 			.build();
-		int sentSchema = schema;
-		httpClient.newCall(request).enqueue(new Callback()
+	}
+
+	private void post(String token, PayloadPacker.Packed packed, Map<Part, Long> stamps, int sentSchema)
+	{
+		Request request = syncRequest(token, packed.json);
+		SiteConfig.Timing timing = siteConfig.timing;
+		siteHttp.newCall(request).enqueue(new Callback()
 		{
 			@Override
 			public void onFailure(Call call, IOException e)
 			{
 				log.debug("OSRS Index sync failed to send", e);
-				clientThread.invoke(() -> settle(SyncOutcome.networkFailure(), token, packed.parts, stamps, sentSchema));
+				clientThread.invoke(() -> settle(SyncOutcome.networkFailure(timing), token, packed.parts, stamps,
+					sentSchema));
 			}
 
 			@Override
@@ -908,11 +940,11 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 				try (ResponseBody body = response.body())
 				{
 					outcome = SyncOutcome.of(response.code(), body == null ? "" : body.string(),
-						response.header("Retry-After"));
+						response.header("Retry-After"), timing);
 				}
 				catch (IOException e)
 				{
-					outcome = SyncOutcome.networkFailure();
+					outcome = SyncOutcome.networkFailure(timing);
 				}
 				SyncOutcome settled = outcome;
 				clientThread.invoke(() -> settle(settled, token, packed.parts, stamps, sentSchema));
@@ -938,14 +970,20 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 					announcedFirstSync = true;
 					chat("Synced to your osrsindex.com account.");
 				}
+				lastWaitMessage = null;
 				lastSync = syncSummary(LocalTime.now(), parts);
 				refreshPanel();
+				if (outcome.configVersion >= 0)
+				{
+					siteConfigFetcher.changed(outcome.configVersion);
+				}
 				break;
 			case OLD_SERVER:
 				// Step down one schema at a time: a site on schema 2 still takes every schema 2 section.
 				if (sentSchema > 1)
 				{
-					if (schema == sentSchema)
+					// The config may have capped what was sent below schema: step down from what was sent.
+					if (schema >= sentSchema)
 					{
 						schema = sentSchema - 1;
 						log.info("OSRS Index: the site does not accept schema {} yet; trying {}", sentSchema, schema);
@@ -954,22 +992,65 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 				}
 				// Schema 1 has nowhere lower to go: this is a real contract break.
 				// fall through
+			case PART_TIMES_REFUSED:
+				if (outcome.kind == SyncOutcome.Kind.PART_TIMES_REFUSED && sendPartTimes)
+				{
+					// The site refused the times, not the parts: they stay dirty and go out again at once, undated,
+					// for the rest of the session. A refusal does not start the site's floor.
+					sendPartTimes = false;
+					log.warn("OSRS Index: the site refused the part times in a sync of {}; sending without them", parts);
+					break;
+				}
+				// The body already carried no times, so the refusal is about something else.
+				// fall through
 			case REJECTED:
-				for (Part part : parts)
+				// When the site names the part it refused, only that part waits for its next change. The
+				// others stay dirty and go out on the next send: a refusal does not start the site's floor.
+				Set<Part> dropped = outcome.dropped(parts);
+				for (Part part : dropped)
 				{
 					dirty.remove(part, stamps.get(part));
 				}
-				log.warn("OSRS Index refused a sync of {}: {}", parts, outcome.code);
-				chat("The site refused part of a sync (" + outcome.code + "). It will try again when that data changes.");
+				log.warn("OSRS Index refused a sync of {}: {}; dropped {}", parts, outcome.code, dropped);
+				chat(outcome.playerMessage != null ? RouteDispatcher.chatSafe(outcome.playerMessage)
+					: "The site refused part of a sync (" + outcome.code + "). It will try again when that data changes.");
 				break;
 			case BAD_TOKEN:
+				if (!token.equals(token()))
+				{
+					// The player unlinked while this sync was out, and Unlink revoked the token it carried; or
+					// they have linked again since. Either way the refusal is not about the current link.
+					break;
+				}
 				rejectedToken = token;
-				chat("osrsindex.com did not accept this client's link. Open the OSRS Index panel to link it again.");
+				chat(outcome.playerMessage != null ? RouteDispatcher.chatSafe(outcome.playerMessage)
+					: "osrsindex.com did not accept this client's link. Open the OSRS Index panel to link it again.");
 				configManager.unsetConfiguration(OsrsIndexConfig.GROUP, "token");
 				linkOfferedThisSession = false;
 				break;
 			case TOO_LARGE:
-				budgetBytes = Math.max(16_000, budgetBytes / 2);
+				nextSendAtMillis = now + outcome.waitSeconds * 1_000L;
+				Part tooLarge = PayloadPacker.tooLargeAlone(parts);
+				if (tooLarge == null)
+				{
+					budgetBytes = PayloadPacker.halved(budgetBytes);
+					if (outcome.playerMessage != null)
+					{
+						lastSync = siteWait(outcome.playerMessage);
+						refreshPanel();
+					}
+					break;
+				}
+				// A smaller budget cannot help a lone part: drop it as a refused part is, until it changes.
+				dirty.remove(tooLarge, stamps.get(tooLarge));
+				if (warnedTooLarge.add(tooLarge))
+				{
+					log.warn("OSRS Index: the site refused {} as too large; it is sent again when it changes",
+						tooLarge.key);
+				}
+				lastSync = outcome.playerMessage != null ? siteWait(outcome.playerMessage) : tooLargeLine(LocalTime.now(),
+					tooLarge);
+				refreshPanel();
 				break;
 			case ACCOUNT_FULL:
 				// Nothing was stored. Keep the changes, and ask again rarely: the player may free a slot.
@@ -977,16 +1058,92 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 				if (!announcedAccountFull)
 				{
 					announcedAccountFull = true;
-					chat("Your osrsindex.com account already tracks the most characters it can, so this one was not synced."
-						+ " Delete tracker data at osrsindex.com/account to make room.");
+					chat(outcome.playerMessage != null ? RouteDispatcher.chatSafe(outcome.playerMessage)
+						: "Your osrsindex.com account already tracks the most characters it can, so this one was not"
+						+ " synced. Delete tracker data at osrsindex.com/account to make room.");
 				}
-				lastSync = ACCOUNT_FULL_LINE;
+				lastSync = outcome.playerMessage != null ? OsrsIndexPanel.escape(outcome.playerMessage) : ACCOUNT_FULL_LINE;
 				refreshPanel();
 				break;
 			case RETRY:
 			default:
 				nextSendAtMillis = now + outcome.waitSeconds * 1_000L;
+				if (outcome.playerMessage != null)
+				{
+					lastSync = siteWait(outcome.playerMessage);
+					refreshPanel();
+				}
 				break;
+		}
+	}
+
+	/**
+	 * The panel's line for a wait the site explained, "Not synced at 14:02: <its message>", escaped for the panel.
+	 * Chat gets the message too, once for each different one, so a maintenance notice is seen but not repeated.
+	 */
+	private String siteWait(String message)
+	{
+		if (!message.equals(lastWaitMessage))
+		{
+			lastWaitMessage = message;
+			chat(RouteDispatcher.chatSafe(message));
+		}
+		return OsrsIndexPanel.escape(waitLine(LocalTime.now(), message));
+	}
+
+	/** "Not synced at 14:02: " and the site's message about why. */
+	static String waitLine(LocalTime at, String message)
+	{
+		return "Not synced at " + at.format(DateTimeFormatter.ofPattern("HH:mm")) + ": " + message;
+	}
+
+	// --- site config -------------------------------------------------------
+
+	/** Use what the site asks of this client now. On the client thread. */
+	private void applySiteConfig(SiteConfig next)
+	{
+		SiteConfigFetcher fetcher = siteConfigFetcher;
+		if (fetcher == null || next != fetcher.current())
+		{
+			// Overtaken by a later answer, or from a fetcher before the plugin restarted: that one applies instead.
+			return;
+		}
+		SiteConfig previous = siteConfig;
+		siteConfig = next;
+		if (next.timing.budgetBytes != previous.timing.budgetBytes)
+		{
+			budgetBytes = next.timing.budgetBytes;
+		}
+		// A part the site un-paused sends its current state, as one the player switches back on does.
+		for (Part part : previous.paused)
+		{
+			if (!next.paused.contains(part) && (part != Part.BANK || capturedBank != null))
+			{
+				markDirty(part);
+			}
+		}
+		if (!next.vars.sameAs(previous.vars))
+		{
+			lastSeen.remove(Part.VARS);
+			markDirty(Part.VARS);
+		}
+		DestinationSocket socket = destinationSocket;
+		if (socket != null)
+		{
+			socket.retryWaits(next.timing.relayRetryMillis, next.timing.relayRetryMaxMillis);
+			if (next.destinations != previous.destinations)
+			{
+				updateDestinations(false);
+				showDestinationStatus(socket.status());
+			}
+		}
+		if (panel != null)
+		{
+			panel.showNotice(next.notice);
+		}
+		if (next.notice != null && next.notice.chat && chattedNotices.add(next.notice.id))
+		{
+			chat(RouteDispatcher.chatSafe(next.notice.text));
 		}
 	}
 
@@ -998,11 +1155,16 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		collectionLog.clear();
 		killCounts.clear();
 		storage.clear();
+		partTimes.clear();
 		profileLoaded = false;
 		profileUnsaved = false;
 		ticksSinceLogin = -1;
 		schema = Part.LATEST_SCHEMA;
-		budgetBytes = PayloadPacker.DEFAULT_BUDGET_BYTES;
+		budgetBytes = siteConfig.timing.budgetBytes;
+		sendPartTimes = true;
+		lastWaitMessage = null;
+		reader.forgetUnreadableVars();
+		warnedTooLarge.clear();
 		announcedFirstSync = false;
 		announcedAccountFull = false;
 		linkOfferedThisSession = false;
@@ -1031,6 +1193,16 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		return when + ": " + (names.isEmpty() ? last : String.join(", ", names) + " and " + last) + ".";
 	}
 
+	/**
+	 * The panel's line after the site refused a lone part as too large:
+	 * "Not synced at 14:02: vars was too large for the site. It is sent again when it changes."
+	 */
+	static String tooLargeLine(LocalTime at, Part part)
+	{
+		return "Not synced at " + at.format(DateTimeFormatter.ofPattern("HH:mm")) + ": " + part.key.replace('_', ' ')
+			+ " was too large for the site. It is sent again when it changes.";
+	}
+
 	private void chat(String message)
 	{
 		gameMessage("OSRS Index: " + message);
@@ -1049,7 +1221,7 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		DestinationSocket socket = destinationSocket;
 		if (socket != null)
 		{
-			socket.update(config.receiveDestinations(), token(), loggedIn, fresh);
+			socket.update(config.receiveDestinations() && siteConfig.destinations, token(), loggedIn, fresh);
 		}
 	}
 
@@ -1064,13 +1236,13 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		if (panel != null)
 		{
 			panel.showDestinations(destinationStatusText(status, config.receiveDestinations(), !token().isEmpty(),
-				loggedIn));
+				loggedIn, !siteConfig.destinations));
 		}
 	}
 
-	/** The panel's status line for the destinations socket. */
+	/** The panel's status line for the destinations socket. {@code sitePaused}: the site config turned it off. */
 	static String destinationStatusText(DestinationSocket.Status status, boolean optedIn, boolean linked,
-		boolean loggedIn)
+		boolean loggedIn, boolean sitePaused)
 	{
 		switch (status)
 		{
@@ -1094,21 +1266,17 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 				{
 					return "Not listening: link this client first.";
 				}
+				if (sitePaused)
+				{
+					return "Not listening: osrsindex.com has paused destinations for now.";
+				}
 				return loggedIn ? "Not listening." : "Not listening: log in to the game first.";
 		}
 	}
 
-	/** A small orange roundel; drawn rather than shipped so the plugin carries no image asset. */
+	/** The compass rose from osrsindex.com's favicon, drawn by hand at 16 px. */
 	private static BufferedImage icon()
 	{
-		BufferedImage image = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
-		Graphics2D g = image.createGraphics();
-		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-		g.setColor(new Color(0xDC, 0x8A, 0x00));
-		g.fillOval(1, 1, 14, 14);
-		g.setColor(new Color(0x1E, 0x1E, 0x1E));
-		g.fillOval(5, 5, 6, 6);
-		g.dispose();
-		return image;
+		return ImageUtil.loadImageResource(OsrsIndexPlugin.class, "sidebar.png");
 	}
 }

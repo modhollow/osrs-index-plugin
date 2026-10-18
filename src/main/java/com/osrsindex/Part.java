@@ -22,7 +22,13 @@ enum Part
 	VARS("vars", 3);
 
 	/** The newest schema this plugin speaks. */
-	static final int LATEST_SCHEMA = 4;
+	static final int LATEST_SCHEMA = 5;
+
+	/**
+	 * The first schema whose body may give a part read before the send its own time, in {@code captured}. An older
+	 * site refuses the schema, the plugin steps down, and that site dates every part at {@code captured_at}.
+	 */
+	static final int PART_TIMES_SCHEMA = 5;
 
 	/** The body key. */
 	final String key;

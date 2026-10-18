@@ -14,8 +14,8 @@ public interface OsrsIndexConfig extends Config
 		keyName = "token",
 		name = "Account token",
 		description = "Filled in for you when you click \"Link with osrsindex.com\" in the OSRS Index panel and approve"
-			+ " this client on the site. You can also paste one from osrsindex.com/account. Nothing is sent until"
-			+ " this is set.",
+			+ " this client on the site. You can also paste one from osrsindex.com/account. Until this is set,"
+			+ " nothing is sent but the link request that button starts.",
 		secret = true,
 		position = 0
 	)
@@ -108,26 +108,6 @@ public interface OsrsIndexConfig extends Config
 		position = 8
 	)
 	default boolean receiveDestinations()
-	{
-		return true;
-	}
-
-	@ConfigSection(
-		name = "Look up on the OSRS Wiki",
-		description = "Open the Old School RuneScape Wiki from the game's right-click menu.",
-		position = 9
-	)
-	String lookUp = "lookUp";
-
-	@ConfigItem(
-		keyName = "lookupMenu",
-		name = "Right-click lookups",
-		description = "Add \"OSRS Wiki\" beside Examine on items and NPCs. It opens that item or NPC on the Old"
-			+ " School RuneScape Wiki in your browser. Nothing is sent from the client.",
-		section = lookUp,
-		position = 10
-	)
-	default boolean lookupMenu()
 	{
 		return true;
 	}

@@ -23,7 +23,8 @@ import net.runelite.client.util.LinkBrowser;
  * The sidebar panel. Not linked, it offers <b>Link with osrsindex.com</b>, which opens the site with this
  * client's code already in it. While a code waits, it shows the code so the player can check the
  * site shows the same one. Linked, it shows the character, the last sync, and buttons to the site's pages
- * for it: the character page, the map at the player's position, and the account page.
+ * for it: the character page, the map at the player's position, and the account page. Above it all, a notice from
+ * osrsindex.com when the site config carries one ({@link SiteConfig.Notice}).
  */
 class OsrsIndexPanel extends PluginPanel
 {
@@ -40,6 +41,9 @@ class OsrsIndexPanel extends PluginPanel
 		void openMapHere();
 	}
 
+	/** The site's notice, or hidden. */
+	private final JLabel notice = new JLabel();
+	private final JButton noticeLink = new JButton("More on osrsindex.com");
 	private final JLabel status = new JLabel();
 	private final JLabel code = new JLabel(" ", SwingConstants.LEFT);
 	private final JLabel detail = new JLabel();
@@ -53,6 +57,13 @@ class OsrsIndexPanel extends PluginPanel
 	private final JButton map = new JButton("Map at my location");
 	private final JButton account = new JButton("Account and linked clients");
 	private final JButton unlink = new JButton("Unlink this client");
+	/**
+	 * The character the linked panel names, so <b>My character</b> opens that one of the account's characters.
+	 * Null until one logs in. Read and written on the Swing thread.
+	 */
+	private String shownCharacter;
+	/** Where the notice's button goes: a page on the site's own origin. Read and written on the Swing thread. */
+	private String noticeUrl;
 
 	OsrsIndexPanel(Actions actions)
 	{
@@ -72,15 +83,24 @@ class OsrsIndexPanel extends PluginPanel
 		code.setBorder(BorderFactory.createEmptyBorder(8, 0, 8, 0));
 		sync.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		destinations.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		notice.setForeground(ColorScheme.BRAND_ORANGE);
+		notice.setBorder(BorderFactory.createEmptyBorder(0, 0, 6, 0));
 
 		link.addActionListener(e -> actions.linkWithBrowser());
 		newCode.addActionListener(e -> actions.requestNewCode());
-		character.addActionListener(e -> LinkBrowser.browse(Endpoints.tracker()));
+		character.addActionListener(e -> LinkBrowser.browse(Endpoints.tracker(shownCharacter)));
 		map.addActionListener(e -> actions.openMapHere());
 		account.addActionListener(e -> LinkBrowser.browse(Endpoints.account()));
 		unlink.addActionListener(e -> actions.unlink());
+		noticeLink.addActionListener(e ->
+		{
+			if (noticeUrl != null)
+			{
+				LinkBrowser.browse(noticeUrl);
+			}
+		});
 
-		for (Component component : new Component[]{title, gap(), status, code, detail, gap(), link, gap(), newCode,
+		for (Component component : new Component[]{title, gap(), notice, noticeLink, status, code, detail, gap(), link, gap(), newCode,
 			gap(), sync, gap(), character, gap(), map, gap(), account, gap(), unlink, gap(), destinations})
 		{
 			if (component instanceof JComponent)
@@ -94,7 +114,20 @@ class OsrsIndexPanel extends PluginPanel
 			body.add(component);
 		}
 		add(body, BorderLayout.NORTH);
+		showNotice(null);
 		showNotLinked(null);
+	}
+
+	/** The site's notice, or none. Its text is plain, so it is escaped here: markup shows as text. */
+	void showNotice(SiteConfig.Notice siteNotice)
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			notice.setText(siteNotice == null ? "" : wrap(escape(siteNotice.text)));
+			notice.setVisible(siteNotice != null);
+			noticeUrl = siteNotice == null ? null : siteNotice.url;
+			noticeLink.setVisible(noticeUrl != null);
+		});
 	}
 
 	private static Component gap()
@@ -104,7 +137,7 @@ class OsrsIndexPanel extends PluginPanel
 
 	private static String wrap(String text)
 	{
-		return "<html><body style='width: 180px'>" + text + "</body></html>";
+		return "<html><body style='width: 150px'>" + text + "</body></html>";
 	}
 
 	/** Linked. {@code characterName} and {@code lastSync} may be null until the player logs in and a sync lands. */
@@ -112,6 +145,7 @@ class OsrsIndexPanel extends PluginPanel
 	{
 		SwingUtilities.invokeLater(() ->
 		{
+			shownCharacter = characterName;
 			status.setText(wrap("Linked. Your character syncs to your osrsindex.com account"
 				+ (characterName == null ? "." : " as <b>" + escape(characterName) + "</b>.")));
 			code.setText(" ");

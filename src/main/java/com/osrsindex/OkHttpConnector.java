@@ -10,7 +10,9 @@ import okhttp3.WebSocketListener;
 
 /**
  * Opens the destinations socket with OkHttp, as the contract asks: the relay's URL, the link token as a
- * bearer, the {@code osrsindex.destinations.v1} subprotocol, and a WebSocket ping every 30 s.
+ * bearer, the {@code osrsindex.destinations.v1} subprotocol, and a WebSocket ping every 30 s. The plugin
+ * passes its {@link SiteHttp} client, and {@code newBuilder()} keeps its interceptor, so the upgrade request
+ * names the plugin's version too.
  */
 final class OkHttpConnector implements DestinationSocket.Connector
 {

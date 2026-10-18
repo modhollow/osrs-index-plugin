@@ -75,6 +75,39 @@ public class AccountLinkerTest
 		pending.remove(0).handle(status, json);
 	}
 
+	@Test
+	public void theSitesPlayerMessageForARefusedLinkIsKept()
+	{
+		linker.start("Zezima");
+		JsonObject full = new JsonObject();
+		full.addProperty("code", "too_many_tokens");
+		full.addProperty("player_message", "You have 8 linked clients, the most allowed.\nRevoke one first.");
+		answer(503, full);
+		assertEquals("You have 8 linked clients, the most allowed. Revoke one first.", linker.playerMessage());
+
+		linker.start("Zezima");
+		assertNull("a new start forgets the last answer's message", linker.playerMessage());
+		answer(429, new JsonObject());
+		assertNull(linker.playerMessage());
+	}
+
+	@Test
+	public void aCodeThatExpiresHereDropsTheSitesLastMessage()
+	{
+		startWaiting(null);
+		now += 15_000;
+		linker.tick();
+		JsonObject busy = new JsonObject();
+		busy.addProperty("player_message", "Linking is slow right now.");
+		answer(503, busy);
+		assertEquals("Linking is slow right now.", linker.playerMessage());
+
+		now += 601_000;
+		linker.tick();
+		assertEquals(AccountLinker.State.EXPIRED, linker.state());
+		assertNull(linker.playerMessage());
+	}
+
 	private void startWaiting(String complete)
 	{
 		linker.start("Zezima");

@@ -42,6 +42,18 @@ final class Endpoints
 		return origin() + "/api/v1/tracker/link/poll";
 	}
 
+	/** What the site asks of this client: a {@code GET} with the token as a bearer (docs/site-config.md). */
+	static String pluginConfig()
+	{
+		return origin() + "/api/v1/tracker/plugin-config";
+	}
+
+	/** Where Unlink revokes this client's token: a {@code DELETE} with the token as a bearer. */
+	static String revokeToken()
+	{
+		return origin() + "/api/v1/tracker/token";
+	}
+
 	/** The WebSocket the site pushes map places down. */
 	static String destinations()
 	{
@@ -71,6 +83,17 @@ final class Endpoints
 		return origin() + "/tracker";
 	}
 
+	/**
+	 * One character's page. An account can hold several, and without {@code ?character=} the site shows
+	 * the first it lists. The name goes as the site stores it, hard spaces read as spaces, or the site would
+	 * not find it. With no name, the plain page.
+	 */
+	static String tracker(String character)
+	{
+		String name = character == null ? "" : character.replace('\u00A0', ' ').trim();
+		return name.isEmpty() ? tracker() : tracker() + "?character=" + encode(name);
+	}
+
 	/** The RuneLite section of the account page: linked clients, Revoke, and deleting what was sent. */
 	static String account()
 	{
@@ -88,18 +111,6 @@ final class Endpoints
 	{
 		return origin() + "/map";
 	}
-
-	/**
-	 * The Old School RuneScape Wiki's search for a name, as a player would type it. An exact page name
-	 * opens that page; anything else opens the wiki's results. Always the real wiki, never this site,
-	 * whatever origin is set for development.
-	 */
-	static String wikiSearch(String query)
-	{
-		return WIKI_SEARCH + encode(query);
-	}
-
-	static final String WIKI_SEARCH = "https://oldschool.runescape.wiki/w/Special:Search?search=";
 
 	private static String encode(String value)
 	{

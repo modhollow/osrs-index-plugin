@@ -1,17 +1,14 @@
 package com.osrsindex;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.time.LocalTime;
 import java.util.EnumSet;
-import net.runelite.api.MenuAction;
 import org.junit.Test;
 
 /**
- * Where the panel's buttons and the right-click entry send the browser, and what the panel says
- * about the last sync.
+ * Where the panel's buttons send the browser, and what the panel says about the last sync.
  */
 public class SiteLinksTest
 {
@@ -26,67 +23,28 @@ public class SiteLinksTest
 	}
 
 	@Test
-	public void theLookupOpensTheRealWikiAndEscapesTheName()
+	public void myCharacterOpensTheLoggedInCharacter()
 	{
-		String wiki = "https://oldschool.runescape.wiki/w/Special:Search?search=";
-		assertEquals(wiki + "Dragon%20scimitar", Endpoints.wikiSearch("Dragon scimitar"));
-		assertEquals(wiki + "Black%20d%27hide%20body", Endpoints.wikiSearch("Black d'hide body"));
-		assertEquals(wiki + "Fish%20%26%20chips%3F%23x", Endpoints.wikiSearch("Fish & chips?#x"));
+		String tracker = "https://osrsindex.com/tracker";
+		assertEquals(tracker + "?character=Zezima", Endpoints.tracker("Zezima"));
+		assertEquals(tracker + "?character=Iron%20Man", Endpoints.tracker("Iron Man"));
+		assertEquals(tracker + "?character=Lil_Jim-2", Endpoints.tracker("Lil_Jim-2"));
 	}
 
 	@Test
-	public void theLookupNeverPointsAtThisSiteEvenWithADevelopmentOrigin()
+	public void aHardSpaceInTheNameIsSentAsTheSpaceTheSiteStores()
 	{
-		String previous = System.getProperty("osrsindex.origin");
-		System.setProperty("osrsindex.origin", "http://localhost:5173");
-		try
-		{
-			assertEquals("https://oldschool.runescape.wiki/w/Special:Search?search=Goblin", Endpoints.wikiSearch("Goblin"));
-		}
-		finally
-		{
-			if (previous == null)
-			{
-				System.clearProperty("osrsindex.origin");
-			}
-			else
-			{
-				System.setProperty("osrsindex.origin", previous);
-			}
-		}
+		// The game writes the space in a player's name as U+00A0; the site stores a plain space.
+		assertEquals("https://osrsindex.com/tracker?character=Iron%20Man", Endpoints.tracker("Iron\u00A0Man"));
+		assertEquals("https://osrsindex.com/tracker?character=A%20B%20C", Endpoints.tracker("\u00A0A\u00A0B C\u00A0"));
 	}
 
 	@Test
-	public void onlyAnItemOrNpcExamineGetsTheEntry()
+	public void withNoCharacterMyCharacterOpensThePlainPage()
 	{
-		assertEquals(SiteLookup.Kind.NPC, SiteLookup.kindOf("Examine", MenuAction.EXAMINE_NPC, -1));
-		assertEquals(SiteLookup.Kind.ITEM, SiteLookup.kindOf("Examine", MenuAction.EXAMINE_ITEM_GROUND, -1));
-		assertEquals(SiteLookup.Kind.ITEM, SiteLookup.kindOf("Examine", MenuAction.CC_OP, 4151));
-		assertEquals(SiteLookup.Kind.ITEM, SiteLookup.kindOf("Examine", MenuAction.CC_OP_LOW_PRIORITY, 4151));
-		// A widget's Examine with no item, another option, and objects get nothing.
-		assertEquals(SiteLookup.Kind.NONE, SiteLookup.kindOf("Examine", MenuAction.CC_OP, -1));
-		assertEquals(SiteLookup.Kind.NONE, SiteLookup.kindOf("Wield", MenuAction.CC_OP, 4151));
-		assertEquals(SiteLookup.Kind.NONE, SiteLookup.kindOf("Examine", MenuAction.EXAMINE_OBJECT, -1));
-		assertEquals(SiteLookup.Kind.NONE, SiteLookup.kindOf(null, MenuAction.EXAMINE_NPC, -1));
-	}
-
-	@Test
-	public void aNameLosesItsTagsLevelAndHardSpaces()
-	{
-		assertEquals("Goblin", SiteLookup.cleanName("<col=ffff00>Goblin<col=ff00>  (level-2)"));
-		assertEquals("Abyssal whip", SiteLookup.cleanName("Abyssal whip"));
-		assertEquals("Tzhaar-Ket", SiteLookup.cleanName("Tzhaar-Ket"));
-		assertNull(SiteLookup.cleanName("null"));
-		assertNull(SiteLookup.cleanName("<col=ff9040></col>"));
-		assertNull(SiteLookup.cleanName(null));
-	}
-
-	@Test
-	public void theLookupSettingDefaultsToOn()
-	{
-		assertTrue(new OsrsIndexConfig()
-		{
-		}.lookupMenu());
+		assertEquals("https://osrsindex.com/tracker", Endpoints.tracker(null));
+		assertEquals("https://osrsindex.com/tracker", Endpoints.tracker(""));
+		assertEquals("https://osrsindex.com/tracker", Endpoints.tracker(" \u00A0"));
 	}
 
 	@Test
@@ -98,6 +56,32 @@ public class SiteLinksTest
 		assertEquals("Last sync at 14:02: combat achievements.",
 			OsrsIndexPlugin.syncSummary(at, EnumSet.of(Part.COMBAT_ACHIEVEMENTS)));
 		assertEquals("Last sync at 14:02.", OsrsIndexPlugin.syncSummary(at, EnumSet.noneOf(Part.class)));
+	}
+
+	@Test
+	public void anUnlinkedClientIsToldHowToLinkAndThatNothingIsSent()
+	{
+		assertTrue(OsrsIndexPlugin.LINK_HINT.contains("nothing is sent"));
+		assertTrue(OsrsIndexPlugin.LINK_HINT.contains("Link with osrsindex.com"));
+	}
+
+	@Test
+	public void aWaitTheSiteExplainedSaysWhenAndWhy()
+	{
+		assertEquals("Not synced at 14:02: Back at 19:00 UTC.",
+			OsrsIndexPlugin.waitLine(LocalTime.of(14, 2), "Back at 19:00 UTC."));
+	}
+
+	@Test
+	public void thePanelSaysWhenTheSiteHasPausedDestinations()
+	{
+		assertEquals("Not listening: osrsindex.com has paused destinations for now.",
+			OsrsIndexPlugin.destinationStatusText(DestinationSocket.Status.OFF, true, true, true, true));
+		assertEquals("the player's own setting is named first",
+			"Not listening: \"Receive destinations\" is off in this plugin's settings.",
+			OsrsIndexPlugin.destinationStatusText(DestinationSocket.Status.OFF, false, true, true, true));
+		assertEquals("Not listening.",
+			OsrsIndexPlugin.destinationStatusText(DestinationSocket.Status.OFF, true, true, true, false));
 	}
 
 	@Test

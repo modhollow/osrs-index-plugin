@@ -20,6 +20,8 @@ public class DestinationSocketTest
 {
 	private static final String TOKEN = OsrsIndexPlugin.TOKEN_PREFIX + repeat('a', 43);
 	private static final String OTHER_TOKEN = OsrsIndexPlugin.TOKEN_PREFIX + repeat('b', 43);
+	/** The relay's first frame on every socket. */
+	private static final String HELLO = "{\"type\":\"hello\",\"protocol\":1}";
 
 	private final List<FakeConnection> opened = new ArrayList<>();
 	private final List<Scheduled> scheduled = new ArrayList<>();
@@ -305,6 +307,19 @@ public class DestinationSocketTest
 	}
 
 	@Test
+	public void theSiteConfigSetsTheBackoffsFirstAndLongestWait()
+	{
+		Random random = new Random(2);
+		long[] bases = {30_000, 60_000, 120_000, 120_000};
+		for (int failures = 0; failures < bases.length; failures++)
+		{
+			long delay = DestinationSocket.retryDelayMillis(failures, -1, random, 30_000, 120_000);
+			assertTrue(delay >= Math.round(bases[failures] * 0.8));
+			assertTrue(delay <= Math.round(bases[failures] * 1.2));
+		}
+	}
+
+	@Test
 	public void aSuccessfulOpenResetsTheBackoff()
 	{
 		socket.update(true, TOKEN, true, true);
@@ -316,6 +331,8 @@ public class DestinationSocketTest
 
 		pendingRetry().task.run();
 		events.opened(last(), DestinationSocket.SUBPROTOCOL);
+		// The relay's hello, not the upgrade alone, makes an open successful.
+		events.text(last(), HELLO);
 		events.closed(last(), 1006);
 		assertTrue(pendingRetry().delayMillis <= 18_000);
 	}
@@ -338,11 +355,139 @@ public class DestinationSocketTest
 		socket.update(true, OTHER_TOKEN, true, true);
 		FakeConnection current = last();
 		events.opened(current, DestinationSocket.SUBPROTOCOL);
+		events.text(current, HELLO);
 
 		events.closed(stale, DestinationSocket.CLOSE_REVOKED);
 		events.text(stale, destinationFrame("stale"));
 		assertEquals(DestinationSocket.Status.LISTENING, socket.status());
 		assertTrue(received.isEmpty());
+	}
+
+	// --- the relay's hello ------------------------------------------------------------------------
+
+	/** Open a socket for TOKEN and complete the upgrade, but without the relay's hello yet. */
+	private FakeConnection upgraded()
+	{
+		socket.update(true, TOKEN, true, true);
+		FakeConnection connection = last();
+		events.opened(connection, DestinationSocket.SUBPROTOCOL);
+		return connection;
+	}
+
+	private Scheduled lastScheduled()
+	{
+		return scheduled.get(scheduled.size() - 1);
+	}
+
+	@Test
+	public void aHelloStartsListeningAndAPlaceRightBehindItIsHandedOn()
+	{
+		FakeConnection connection = upgraded();
+		Scheduled deadline = lastScheduled();
+		assertEquals(DestinationSocket.HELLO_TIMEOUT_MILLIS, deadline.delayMillis);
+		// The upgrade alone is not listening: the relay has not answered yet.
+		assertEquals(DestinationSocket.Status.CONNECTING, socket.status());
+
+		// The site sends a waiting place straight after the hello, so both can arrive together.
+		events.text(connection, HELLO);
+		events.text(connection, destinationFrame("d-1"));
+		assertEquals(DestinationSocket.Status.LISTENING, socket.status());
+		assertTrue(deadline.cancelled);
+		assertEquals(1, received.size());
+		assertEquals("d-1", received.get(0).id);
+
+		// A deadline that fires anyway, its cancel having lost the race with the hello, changes nothing.
+		deadline.task.run();
+		assertNull(connection.closedWith);
+		assertEquals(DestinationSocket.Status.LISTENING, socket.status());
+	}
+
+	@Test
+	public void aHelloOfAnotherProtocolIsClosedAndRetried()
+	{
+		for (String hello : new String[]{"{\"type\":\"hello\",\"protocol\":2}", "{\"type\":\"hello\"}"})
+		{
+			FakeConnection connection = upgraded();
+			Scheduled deadline = lastScheduled();
+			events.text(connection, hello);
+
+			assertEquals(hello, Integer.valueOf(DestinationSocket.CLOSE_NORMAL), connection.closedWith);
+			assertEquals(hello, DestinationSocket.Status.RETRYING, socket.status());
+			assertTrue(hello, deadline.cancelled);
+			assertNotNull(hello, pendingRetry());
+			// Whatever the refused socket sends next is not acted on.
+			events.text(connection, HELLO);
+			events.text(connection, destinationFrame("late"));
+			assertEquals(hello, DestinationSocket.Status.RETRYING, socket.status());
+			assertTrue(hello, received.isEmpty());
+
+			// Reset for the next frame.
+			socket.update(false, TOKEN, true, false);
+			scheduled.clear();
+		}
+		assertTrue(DestinationSocket.isAnyHello("{\"type\":\"hello\",\"protocol\":2}"));
+		assertFalse(DestinationSocket.isAnyHello(destinationFrame("d")));
+	}
+
+	@Test
+	public void noHelloWithin10SecondsIsClosedAndRetried()
+	{
+		FakeConnection connection = upgraded();
+		lastScheduled().task.run();
+
+		assertEquals(Integer.valueOf(DestinationSocket.CLOSE_NORMAL), connection.closedWith);
+		assertEquals(DestinationSocket.Status.RETRYING, socket.status());
+		Scheduled retry = pendingRetry();
+		assertNotNull(retry);
+		// A hello that comes too late is not listened to.
+		events.text(connection, HELLO);
+		assertEquals(DestinationSocket.Status.RETRYING, socket.status());
+
+		// A relay that keeps upgrading without a hello is backed off further each time.
+		retry.task.run();
+		events.opened(last(), DestinationSocket.SUBPROTOCOL);
+		lastScheduled().task.run();
+		assertEquals(Integer.valueOf(DestinationSocket.CLOSE_NORMAL), last().closedWith);
+		assertTrue(pendingRetry().delayMillis >= 24_000);
+	}
+
+	@Test
+	public void aPlaceBeforeTheHelloIsNotHandedOn()
+	{
+		FakeConnection connection = upgraded();
+		events.text(connection, destinationFrame("early"));
+		events.text(connection, "{\"type\":\"news\"}");
+		assertTrue(received.isEmpty());
+		assertNull(connection.closedWith);
+		assertEquals(DestinationSocket.Status.CONNECTING, socket.status());
+
+		events.text(connection, HELLO);
+		assertEquals(DestinationSocket.Status.LISTENING, socket.status());
+	}
+
+	@Test
+	public void theHelloDeadlineGoesWithItsSocket()
+	{
+		FakeConnection dropped = upgraded();
+		Scheduled deadline = lastScheduled();
+		events.closed(dropped, 1006);
+		assertTrue(deadline.cancelled);
+		Scheduled retry = pendingRetry();
+
+		// Firing late, it neither closes the next socket nor schedules another retry.
+		retry.task.run();
+		FakeConnection next = last();
+		events.opened(next, DestinationSocket.SUBPROTOCOL);
+		int before = scheduled.size();
+		deadline.task.run();
+		assertNull(next.closedWith);
+		assertEquals(before, scheduled.size());
+
+		// Logging out before the hello cancels the new socket's deadline too.
+		Scheduled nextDeadline = lastScheduled();
+		socket.update(true, TOKEN, false, false);
+		assertTrue(nextDeadline.cancelled);
+		assertEquals(DestinationSocket.Status.OFF, socket.status());
 	}
 
 	// --- frames -----------------------------------------------------------------------------------
@@ -369,34 +514,62 @@ public class DestinationSocketTest
 	}
 
 	@Test
-	public void unknownAndMalformedFramesAreIgnored()
+	public void unknownFramesAndDestinationsWithoutAStringIdAreIgnored()
 	{
 		FakeConnection connection = listening();
 		events.text(connection, "{\"type\":\"news\",\"id\":\"x\"}");
 		events.text(connection, "not json");
 		events.text(connection, "[1,2]");
-		events.text(connection, "{\"type\":\"destination\",\"id\":\"d\",\"x\":\"3036\",\"y\":1,\"plane\":0,"
+		events.text(connection, "{\"type\":\"destination\",\"x\":1,\"y\":1,\"plane\":0,"
 			+ "\"label\":\"a\",\"expires_at\":\"2026-09-26T12:02:00Z\"}");
-		events.text(connection, "{\"type\":\"destination\",\"id\":\"d\",\"x\":1.5,\"y\":1,\"plane\":0,"
+		events.text(connection, "{\"type\":\"destination\",\"id\":7,\"x\":1,\"y\":1,\"plane\":0,"
 			+ "\"label\":\"a\",\"expires_at\":\"2026-09-26T12:02:00Z\"}");
-		events.text(connection, "{\"type\":\"destination\",\"id\":\"d\",\"x\":1,\"y\":1,\"plane\":0,"
-			+ "\"label\":\"a\",\"expires_at\":\"yesterday\"}");
 		assertTrue(received.isEmpty());
 		assertTrue(DestinationSocket.isHello("{\"type\":\"hello\",\"protocol\":1}"));
 		assertFalse(DestinationSocket.isHello("{\"type\":\"hello\",\"protocol\":2}"));
 	}
 
 	@Test
-	public void anAckIsOneSmallFrameAndOnlyWhileListening()
+	public void aMalformedDestinationWithAnIdIsHandedOnAsInvalidSoItCanBeAcked()
 	{
-		assertFalse(socket.ack("d-0"));
 		FakeConnection connection = listening();
-		assertTrue(socket.ack("d-1"));
-		assertEquals("{\"type\":\"ack\",\"id\":\"d-1\"}", connection.sent.get(0));
-		assertTrue(connection.sent.get(0).getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= 1_024);
+		events.text(connection, "{\"type\":\"destination\",\"id\":\"d\",\"x\":\"3036\",\"y\":1,\"plane\":0,"
+			+ "\"label\":\"a\",\"expires_at\":\"2026-09-26T12:02:00Z\"}");
+		events.text(connection, "{\"type\":\"destination\",\"id\":\"d\",\"x\":1,\"y\":1.5,\"plane\":0,"
+			+ "\"label\":\"a\",\"expires_at\":\"2026-09-26T12:02:00Z\"}");
+		events.text(connection, "{\"type\":\"destination\",\"id\":\"d\",\"x\":1,\"y\":1,\"plane\":0,"
+			+ "\"label\":\"a\",\"expires_at\":\"yesterday\"}");
+		events.text(connection, "{\"type\":\"destination\",\"id\":\"d\",\"x\":1,\"y\":1,"
+			+ "\"label\":\"a\",\"expires_at\":\"2026-09-26T12:02:00Z\"}");
+		events.text(connection, "{\"type\":\"destination\",\"id\":\"d\",\"x\":1,\"y\":1,\"plane\":0,"
+			+ "\"label\":7,\"expires_at\":\"2026-09-26T12:02:00Z\"}");
+
+		assertEquals(5, received.size());
+		assertEquals(DestinationSocket.UNREADABLE, received.get(0).x);
+		assertEquals(DestinationSocket.UNREADABLE, received.get(1).y);
+		assertNull(received.get(2).expiresAt);
+		assertEquals(DestinationSocket.UNREADABLE, received.get(3).plane);
+		assertNull(received.get(4).label);
+		for (Destination destination : received)
+		{
+			assertEquals("d", destination.id);
+			assertFalse(RouteDispatcher.valid(destination));
+			assertTrue(RouteDispatcher.ackable(destination));
+		}
+	}
+
+	@Test
+	public void anAckIsOneSmallFrameWithItsResultAndOnlyWhileListening()
+	{
+		assertFalse(socket.ack("d-0", "routed"));
+		FakeConnection connection = listening();
+		assertTrue(socket.ack("d-1", "routed"));
+		assertEquals("{\"type\":\"ack\",\"id\":\"d-1\",\"result\":\"routed\"}", connection.sent.get(0));
+		assertTrue(socket.ack(repeat('a', RouteDispatcher.MAX_ID_LENGTH), "no_pathing_plugin"));
+		assertTrue(connection.sent.get(1).getBytes(java.nio.charset.StandardCharsets.UTF_8).length <= 1_024);
 
 		socket.update(false, TOKEN, true, false);
-		assertFalse(socket.ack("d-2"));
+		assertFalse(socket.ack("d-2", "routed"));
 	}
 
 	@Test

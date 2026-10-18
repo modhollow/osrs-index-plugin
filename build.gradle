@@ -3,7 +3,7 @@ plugins {
 }
 
 group = 'com.osrsindex'
-version = '0.3.0'
+version = '0.4.0'
 
 def runeLiteVersion = providers.gradleProperty('runeliteVersion').get()
 
@@ -58,6 +58,16 @@ tasks.register('run', JavaExec) {
 		systemProperty 'osrsindex.relay', project.property('osrsindex.relay')
 	}
 	args '--developer-mode', '--disable-telemetry', '--profile', 'osrs-index-dev'
+}
+
+// `gradlew panelImages` draws the README's panel images into images/, from the plugin's own panel.
+tasks.register('panelImages', JavaExec) {
+	group = 'documentation'
+	description = 'Draws the README panel images into images/.'
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'com.osrsindex.PanelImages'
+	javaLauncher = launcher
+	args file('images').path
 }
 
 tasks.withType(Test).configureEach {
