@@ -13,6 +13,7 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.EnumSet;
@@ -25,9 +26,16 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import javax.inject.Inject;
+import net.runelite.api.Actor;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.NPC;
+import net.runelite.api.Player;
+import net.runelite.api.Quest;
+import net.runelite.api.QuestState;
+import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.events.ActorDeath;
 import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.FocusChanged;
 import net.runelite.api.events.GameStateChanged;
@@ -46,15 +54,20 @@ import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.events.PluginChanged;
 import net.runelite.client.events.PluginMessage;
+import net.runelite.client.game.ItemManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.plugins.PluginManager;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
+import net.runelite.client.ui.overlay.OverlayManager;
+import net.runelite.client.ui.overlay.worldmap.WorldMapPointManager;
 import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.LinkBrowser;
 import net.runelite.client.util.Text;
+import net.runelite.http.api.item.ItemPrice;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.MediaType;
@@ -83,6 +96,10 @@ import org.slf4j.LoggerFactory;
  * <p>Linked, it also reads what osrsindex.com asks of it ({@link SiteConfig}, docs/site-config.md): waits and
  * limits, parts to pause, which vars to send and a notice for the panel, so the site can change those without a
  * plugin release. Without that config, or before it arrives, the plugin keeps its built-in values.
+ *
+ * <p>Its Guides tab follows an osrsindex.com guide step by step ({@link GuideTracker}), and hands quest steps to
+ * Quest Helper. Guides are public: they are downloaded only when the player opens the tab, linked or not, and
+ * progress stays in the RuneLite profile.
  */
 @PluginDescriptor(
 	name = "OSRS Index",
@@ -95,7 +112,7 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 
 	static final String TOKEN_PREFIX = "osrsidx_";
 	/** This release, as build.gradle's {@code version} says; the plugin bus {@code hello} carries it. */
-	static final String VERSION = "0.4.0";
+	static final String VERSION = "0.5.0";
 	/** This plugin's id on the plugin bus (docs/plugin-bus.md), which is also its namespace there. */
 	static final String BUS_ID = "osrsindex";
 	private static final MediaType JSON = MediaType.parse("application/json");
@@ -148,6 +165,16 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 	@Inject
 	private ScheduledExecutorService executor;
 
+	@Inject
+	private OverlayManager overlayManager;
+
+	@Inject
+	private WorldMapPointManager worldMapPointManager;
+
+	/** The game's item sprites, for the Guides tab's inventory slots. */
+	@Inject
+	private ItemManager itemManager;
+
 	private final CollectionLogTracker collectionLog = new CollectionLogTracker();
 	private final KillCountTracker killCounts = new KillCountTracker();
 	private final StorageTracker storage = new StorageTracker();
@@ -166,12 +193,16 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 	private EventBus.Subscriber pluginBusSubscriber;
 	private DestinationSocket destinationSocket;
 	private DestinationReceiver destinationReceiver;
+	private GuideTracker guideTracker;
+	private GuideTracker.Overlays guideOverlays;
 	/** Whether someone is logged in; hopping and loading keep it. Read off the client thread. */
 	private volatile boolean loggedIn;
 
 	private JsonElement capturedBank;
 	private long stamp;
 	private int ticksSinceLogin = -1;
+	/** Who the open dialogue is with, so the guide hears of each conversation once. */
+	private String lastDialogueName;
 	private int tickCount;
 	private boolean profileLoaded;
 	private boolean profileUnsaved;
@@ -219,7 +250,20 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		siteConfig = SiteConfig.DEFAULTS;
 		siteConfigFetcher = new SiteConfigFetcher(siteHttp, next -> clientThread.invoke(() -> applySiteConfig(next)));
 		linker = new AccountLinker(siteHttp, gson, this);
-		panel = new OsrsIndexPanel(this);
+		guideOverlays = new GuideTracker.Overlays(new GuideMinimapOverlay(client), new GuideTileOverlay(client),
+			new GuideStepOverlay());
+		overlayManager.add(guideOverlays.minimap);
+		overlayManager.add(guideOverlays.tile);
+		overlayManager.add(guideOverlays.step);
+		// Its own dispatcher: Walk there is the player's click, not a site destination to ack.
+		guideTracker = new GuideTracker(client, clientThread, guideHost(), config, new GuideFetcher(siteHttp),
+			new RouteDispatcher(eventBus::post, RouteDispatcher.activeIn(pluginManager), Clock.systemUTC()),
+			worldMapPointManager, guideOverlays, icon());
+		guideTracker.panel().itemImages((itemId, target) -> itemManager.getImage(itemId).addTo(target));
+		guideTracker.itemIds(this::itemIdByName);
+		guideTracker.untradeable(id -> !itemManager.getItemComposition(id).isTradeable());
+		panel = new OsrsIndexPanel(this, guideTracker.panel());
+		panel.showGuidesTab(config.showGuides());
 		navigationButton = NavigationButton.builder()
 			.tooltip("OSRS Index")
 			.icon(icon())
@@ -276,6 +320,10 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		{
 			linker.cancel();
 		}
+		guideTracker.shutDown();
+		overlayManager.remove(guideOverlays.minimap);
+		overlayManager.remove(guideOverlays.tile);
+		overlayManager.remove(guideOverlays.step);
 		clientToolbar.removeNavigation(navigationButton);
 	}
 
@@ -376,6 +424,12 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 	}
 
 	@Override
+	public void guidesOpened()
+	{
+		guideTracker.opened();
+	}
+
+	@Override
 	public void openMapHere()
 	{
 		clientThread.invoke(() ->
@@ -445,6 +499,69 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		}
 	}
 
+	/** This plugin's guide settings: a change to any re-checks the guide and its map point. */
+	private static final Set<String> GUIDE_KEYS = new HashSet<>(Arrays.asList("showGuides", "guideMapMarker",
+		"guideMinimapArrow", "guideTileHighlight", "guideStepBox", "guideQuestHelper"));
+
+	/**
+	 * What the guide tracker reads and writes through RuneLite: this plugin's own profile values, and Quest Helper read
+	 * only, by its name in the plugin list and its stored auto-start setting. Nothing of Quest Helper's is ever written.
+	 */
+	private GuideTracker.Host guideHost()
+	{
+		return new GuideTracker.Host()
+		{
+			@Override
+			public String profile(String key)
+			{
+				return configManager.getRSProfileConfiguration(OsrsIndexConfig.GROUP, key);
+			}
+
+			@Override
+			public void saveProfile(String key, String value)
+			{
+				configManager.setRSProfileConfiguration(OsrsIndexConfig.GROUP, key, value);
+			}
+
+			@Override
+			public boolean questHelperRunning()
+			{
+				for (Plugin plugin : pluginManager.getPlugins())
+				{
+					if (QuestHelperHandOff.PLUGIN_NAME.equals(plugin.getName()) && pluginManager.isPluginActive(plugin))
+					{
+						return true;
+					}
+				}
+				return false;
+			}
+
+			@Override
+			public String questHelperAutoStart()
+			{
+				return configManager.getConfiguration(QuestHelperHandOff.CONFIG_GROUP, QuestHelperHandOff.AUTO_START_KEY);
+			}
+
+			@Override
+			public QuestState questState(Quest quest)
+			{
+				return quest.getState(client);
+			}
+
+			@Override
+			public void post(PluginMessage message)
+			{
+				eventBus.post(message);
+			}
+
+			@Override
+			public void chat(String message)
+			{
+				OsrsIndexPlugin.this.chat(message);
+			}
+		};
+	}
+
 	/** The once-a-session line for an unlinked client. */
 	static final String LINK_HINT = "This client is not linked to osrsindex.com, so nothing is sent. To link it, click"
 		+ " Link with osrsindex.com in the OSRS Index panel.";
@@ -476,6 +593,7 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 				updateDestinations(false);
 				panelCharacter = null;
 				refreshPanel();
+				guideTracker.loggedOut();
 				break;
 			default:
 				// HOPPING and LOADING keep the session: same account, same data.
@@ -486,8 +604,20 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 	@Subscribe
 	public void onConfigChanged(ConfigChanged event)
 	{
+		if (QuestHelperHandOff.CONFIG_GROUP.equals(event.getGroup())
+			&& QuestHelperHandOff.AUTO_START_KEY.equals(event.getKey()))
+		{
+			guideTracker.settingsChanged();
+			return;
+		}
 		if (!OsrsIndexConfig.GROUP.equals(event.getGroup()))
 		{
+			return;
+		}
+		if (GUIDE_KEYS.contains(event.getKey()))
+		{
+			panel.showGuidesTab(config.showGuides());
+			guideTracker.settingsChanged();
 			return;
 		}
 		if ("token".equals(event.getKey()))
@@ -522,6 +652,7 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 	public void onItemContainerChanged(ItemContainerChanged event)
 	{
 		int id = event.getContainerId();
+		guideTracker.itemsChanged(id);
 		if (id == InventoryID.WORN)
 		{
 			markDirty(Part.EQUIPMENT);
@@ -560,6 +691,7 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 	public void onStatChanged(StatChanged event)
 	{
 		markDirty(Part.SKILLS);
+		guideTracker.statChanged();
 	}
 
 	@Subscribe
@@ -569,6 +701,24 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		{
 			markDirty(Part.QUESTS);
 		}
+		guideTracker.varbitChanged(event.getVarpId(), event.getVarbitId());
+	}
+
+	/** Quest Helper turned on or off changes who guides a quest step. */
+	@Subscribe
+	public void onPluginChanged(PluginChanged event)
+	{
+		if (QuestHelperHandOff.PLUGIN_NAME.equals(event.getPlugin().getName()))
+		{
+			guideTracker.settingsChanged();
+		}
+	}
+
+	/** Quest Helper's {@code selected}, once it posts one. The plugin bus reads its own messages itself. */
+	@Subscribe
+	public void onPluginMessage(PluginMessage event)
+	{
+		guideTracker.pluginMessage(event);
 	}
 
 	@Subscribe
@@ -584,6 +734,7 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		{
 			return;
 		}
+		guideTracker.gameMessage(Text.removeTags(event.getMessage()));
 		if (profileLoaded && killCounts.offer(Text.removeTags(event.getMessage())))
 		{
 			partTimes.mark(Part.KILL_COUNTS, Instant.now());
@@ -636,8 +787,11 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 			markAllDirty();
 			panelCharacter = reader.characterName();
 			refreshPanel();
+			guideTracker.loggedIn();
 		}
 
+		guideTracker.tick();
+		readGuideSigns();
 		maybeOfferLink();
 		linker.tick();
 		siteConfigFetcher.tick(token());
@@ -657,6 +811,49 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 			saveProfile();
 		}
 		maybeSend();
+	}
+
+	/** What the guide's current step may be waiting for: who the player is talking to, and where they stand. */
+	private void readGuideSigns()
+	{
+		Widget name = client.getWidget(InterfaceID.ChatLeft.NAME);
+		String talking = name == null || name.isHidden() ? null : Text.removeTags(name.getText());
+		if (talking != null && !talking.equals(lastDialogueName))
+		{
+			guideTracker.npcTalkedTo(talking);
+		}
+		lastDialogueName = talking;
+		Player player = client.getLocalPlayer();
+		if (player != null)
+		{
+			WorldPoint at = player.getWorldLocation();
+			guideTracker.playerAt(at.getX(), at.getY(), at.getPlane());
+		}
+	}
+
+	/** Something died: the guide hears of it when it was fighting the player, for a step to kill it. */
+	@Subscribe
+	public void onActorDeath(ActorDeath event)
+	{
+		Actor actor = event.getActor();
+		Player player = client.getLocalPlayer();
+		if (actor instanceof NPC && player != null && (player.getInteracting() == actor || actor.getInteracting() == player))
+		{
+			guideTracker.npcKilled(actor.getName());
+		}
+	}
+
+	/** A tradeable item's id by its exact name, from RuneLite's item prices, or -1: for guide items with no id. */
+	private int itemIdByName(String name)
+	{
+		for (ItemPrice price : itemManager.search(name))
+		{
+			if (price.getName().equalsIgnoreCase(name))
+			{
+				return price.getId();
+			}
+		}
+		return -1;
 	}
 
 	// --- change tracking ---------------------------------------------------

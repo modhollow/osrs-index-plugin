@@ -111,4 +111,86 @@ public interface OsrsIndexConfig extends Config
 	{
 		return true;
 	}
+
+	@ConfigSection(
+		name = "Guides",
+		description = "osrsindex.com's step-by-step guides, followed in the OSRS Index panel.",
+		position = 9
+	)
+	String guides = "guides";
+
+	@ConfigItem(
+		keyName = "showGuides",
+		name = "Show guides",
+		description = "A Guides tab in the OSRS Index panel. Guides are downloaded from osrsindex.com only when you"
+			+ " open that tab or a guide, and need no link. Your progress stays on this computer.",
+		section = guides,
+		position = 10
+	)
+	default boolean showGuides()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "guideMapMarker",
+		name = "World map marker",
+		description = "Mark the place of the guide's current step on the world map.",
+		section = guides,
+		position = 11
+	)
+	default boolean guideMapMarker()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "guideMinimapArrow",
+		name = "Minimap arrow",
+		description = "Point the way to the current step's place on the minimap, when it is on your floor.",
+		section = guides,
+		position = 12
+	)
+	default boolean guideMinimapArrow()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "guideTileHighlight",
+		name = "Tile highlight",
+		description = "Outline the current step's tile in the game world when it is in view.",
+		section = guides,
+		position = 13
+	)
+	default boolean guideTileHighlight()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "guideStepBox",
+		name = "Step box",
+		description = "Show the current step in a box on the game screen, as Quest Helper does. It hides while Quest"
+			+ " Helper guides the step's quest.",
+		section = guides,
+		position = 14
+	)
+	default boolean guideStepBox()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "guideQuestHelper",
+		name = "Hand quest steps to Quest Helper",
+		description = "When the Quest Helper plugin is on, let it guide a guide's quest steps. The guide moves on by"
+			+ " itself when the quest is finished.",
+		section = guides,
+		position = 15
+	)
+	default boolean guideQuestHelper()
+	{
+		return true;
+	}
 }

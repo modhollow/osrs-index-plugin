@@ -17,6 +17,8 @@ import javax.swing.SwingUtilities;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.FontManager;
 import net.runelite.client.ui.PluginPanel;
+import net.runelite.client.ui.components.materialtabs.MaterialTab;
+import net.runelite.client.ui.components.materialtabs.MaterialTabGroup;
 import net.runelite.client.util.LinkBrowser;
 
 /**
@@ -25,6 +27,8 @@ import net.runelite.client.util.LinkBrowser;
  * site shows the same one. Linked, it shows the character, the last sync, and buttons to the site's pages
  * for it: the character page, the map at the player's position, and the account page. Above it all, a notice from
  * osrsindex.com when the site config carries one ({@link SiteConfig.Notice}).
+ *
+ * <p>With "Show guides" on, that is the <b>Account</b> tab, and a <b>Guides</b> tab holds the {@link GuidesPanel}.
  */
 class OsrsIndexPanel extends PluginPanel
 {
@@ -39,6 +43,9 @@ class OsrsIndexPanel extends PluginPanel
 
 		/** Open the site's map at the player's position, or the whole map when it is unknown. */
 		void openMapHere();
+
+		/** The player opened the Guides tab, or the panel with it showing: the only time guides are fetched. */
+		void guidesOpened();
 	}
 
 	/** The site's notice, or hidden. */
@@ -64,9 +71,14 @@ class OsrsIndexPanel extends PluginPanel
 	private String shownCharacter;
 	/** Where the notice's button goes: a page on the site's own origin. Read and written on the Swing thread. */
 	private String noticeUrl;
+	private final Actions actions;
+	private final MaterialTabGroup tabs;
+	private final MaterialTab accountTab;
+	private final MaterialTab guidesTab;
 
-	OsrsIndexPanel(Actions actions)
+	OsrsIndexPanel(Actions actions, GuidesPanel guides)
 	{
+		this.actions = actions;
 		setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 		setLayout(new BorderLayout());
 
@@ -100,7 +112,7 @@ class OsrsIndexPanel extends PluginPanel
 			}
 		});
 
-		for (Component component : new Component[]{title, gap(), notice, noticeLink, status, code, detail, gap(), link, gap(), newCode,
+		for (Component component : new Component[]{notice, noticeLink, status, code, detail, gap(), link, gap(), newCode,
 			gap(), sync, gap(), character, gap(), map, gap(), account, gap(), unlink, gap(), destinations})
 		{
 			if (component instanceof JComponent)
@@ -113,9 +125,61 @@ class OsrsIndexPanel extends PluginPanel
 			}
 			body.add(component);
 		}
-		add(body, BorderLayout.NORTH);
+
+		JPanel display = new JPanel(new BorderLayout());
+		display.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		tabs = new MaterialTabGroup(display);
+		tabs.setBorder(BorderFactory.createEmptyBorder(6, 0, 8, 0));
+		accountTab = new MaterialTab("Account", tabs, body);
+		guidesTab = new MaterialTab("Guides", tabs, guides);
+		guidesTab.setOnSelectEvent(() ->
+		{
+			actions.guidesOpened();
+			return true;
+		});
+		tabs.addTab(accountTab);
+		tabs.addTab(guidesTab);
+		tabs.select(accountTab);
+
+		JPanel top = new JPanel(new BorderLayout());
+		top.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		top.add(title, BorderLayout.NORTH);
+		top.add(tabs, BorderLayout.CENTER);
+		JPanel content = new JPanel(new BorderLayout());
+		content.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		content.add(top, BorderLayout.NORTH);
+		content.add(display, BorderLayout.CENTER);
+		add(content, BorderLayout.NORTH);
 		showNotice(null);
 		showNotLinked(null);
+	}
+
+	/** Show the Guides tab, or only what was the whole panel before guides, with "Show guides" off. */
+	void showGuidesTab(boolean shown)
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			tabs.setVisible(shown);
+			if (!shown && guidesTab.isSelected())
+			{
+				tabs.select(accountTab);
+			}
+		});
+	}
+
+	/** Show the Guides tab, as a click on it does. */
+	void selectGuidesTab()
+	{
+		SwingUtilities.invokeLater(() -> tabs.select(guidesTab));
+	}
+
+	@Override
+	public void onActivate()
+	{
+		if (guidesTab.isSelected() && tabs.isVisible())
+		{
+			actions.guidesOpened();
+		}
 	}
 
 	/** The site's notice, or none. Its text is plain, so it is escaped here: markup shows as text. */

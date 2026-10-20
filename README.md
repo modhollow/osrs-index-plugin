@@ -20,6 +20,7 @@ up to 10 characters.
 - [What osrsindex.com can change](#what-osrsindexcom-can-change)
 - [Your data](#your-data)
 - [The panel](#the-panel)
+- [Guides](#guides)
 - [Walk here from the site](#walk-here-from-the-site)
 - [Settings](#settings)
 - [Chat messages](#chat-messages)
@@ -30,6 +31,8 @@ up to 10 characters.
 - **One-click linking:** no token to paste and no code to type.
 - **Character sync:** gear, bank and item stores, skills, quests, diaries, combat achievements, collection log, slayer,
   kill counts, Grand Exchange offers and location.
+- **Guides:** follow osrsindex.com's step-by-step guides in the panel, as Quest Helper shows a quest, with quest
+  steps handed to Quest Helper. No link needed.
 - **Walk here from the site:** pick a place on osrsindex.com's map, and this client routes you there with Shortest
   Path.
 - **A panel** with your last sync and buttons to your character page, the map at your location and your account.
@@ -38,8 +41,9 @@ up to 10 characters.
 
 <img src="images/panel-link-code.png" width="225" alt="The panel while a link code waits for approval" align="right" />
 
-**Until you click Link, the plugin sends nothing.** An unlinked client makes no request to osrsindex.com. Once per
-session it says in chat that it is not linked.
+**Until you click Link, the plugin sends nothing about your character.** An unlinked client makes no request to
+osrsindex.com, apart from downloading the [guides](#guides) you open in the Guides tab, which carries nothing about
+you. Once per session it says in chat that it is not linked.
 
 1. Log in to the game, open the **OSRS Index** sidebar panel (the orange roundel), and click **Link with
    osrsindex.com**.
@@ -111,6 +115,8 @@ and has no analytics or tracking.
 | `GET osrsindex.com/api/v1/tracker/plugin-config` | linked and logged in: at login, then about once an hour | nothing but the link token | sync settings and an optional notice ([what the site can change](#what-osrsindexcom-can-change)) |
 | `DELETE osrsindex.com/api/v1/tracker/token` | when you click **Unlink this client** | the link token, so the site revokes it | nothing |
 | `wss://relay.osrsindex.com/v1/destinations` | linked, logged in, and **Receive destinations** on: one connection kept open | the link token when it connects; an acknowledgement for each place it receives (its id and what became of it: routed, Shortest Path off, expired, or unreadable) | the places you send from the site's map, and nothing else |
+| `GET osrsindex.com/api/v1/guides` | only when you open the Guides tab: at most once an hour, linked or not | nothing: no token, no character data | the list of guides the site offers in RuneLite |
+| `GET osrsindex.com/api/v1/guides/<id>` | when you open a guide, and again only once the site changed it, linked or not | nothing: no token, no character data | that guide's sections and steps |
 
 **Every request:**
 - carries the plugin's version number in an `X-OSRS-Index-Plugin` header, so your account page can show which
@@ -118,7 +124,11 @@ and has no analytics or tracking.
 - shows your IP address to osrsindex.com, as any web request does.
 
 **Inside RuneLite only, nothing leaves the client:**
-- A place from the site's map is handed to the Shortest Path plugin through RuneLite's plugin messages.
+- A place from the site's map, or a guide step's place when you click **Walk there**, is handed to the Shortest Path
+  plugin through RuneLite's plugin messages.
+- **Follow with Quest Helper** on a guide's quest step posts a `questhelper` `start` message with the quest's name.
+  The plugin reads Quest Helper's place in the plugin list and its "Auto start helper" setting, and never changes
+  Quest Helper's settings.
 - The plugin greets the author's other plugins (Farm Route Planner, Slayer Route Planner) the same way, so they know
   it is there.
 
@@ -154,13 +164,15 @@ Settings from the site are only ever data: it cannot make the plugin run anythin
 - **Stop it:** turn a group off in the settings and it stops being sent. **Unlink this client** stops everything,
   and revokes the link on the site.
 - **Kept on your computer:** your link token, and the collection log items, item stores and kill counts the plugin
-  has read. They stay in your RuneLite profile, so they are not lost between sessions.
+  has read. They stay in your RuneLite profile, so they are not lost between sessions. Your guide progress is kept
+  there too, per character, and is never sent.
 
 ## The panel
 
 <img src="images/panel-not-linked.png" width="225" alt="The panel before linking" align="right" />
 
-Before linking, the **OSRS Index** panel shows how to link. Once linked, it shows:
+The panel has two tabs: **Account**, described here, and [**Guides**](#guides). Before linking, the Account tab
+shows how to link. Once linked, it shows:
 - the character it syncs;
 - the last sync, for example "Last sync at 14:02: location, skills and bank.". If a group is ever too large for the
   site to accept, this line names it instead, and that group is sent again when it next changes;
@@ -171,6 +183,47 @@ Before linking, the **OSRS Index** panel shows how to link. Once linked, it show
 | **My character** | the page of the character you are logged in as, with everything the plugin has sent |
 | **Map at my location** | the site's map at your current tile |
 | **Account and linked clients** | your account page: each linked client with Revoke, and Delete tracker data |
+
+<br clear="right" />
+
+## Guides
+
+<img src="images/panel-guide-step.png" width="225" alt="The Guides tab: a guide open at its current step, a quest step handed to Quest Helper" align="right" />
+
+The **Guides** tab shows osrsindex.com's step-by-step guides inside RuneLite, the way Quest Helper shows a quest.
+
+- **Pick a guide** from the list the site offers. Its count sits over a strip with one segment per step, and every
+  step sits on a route line: a green tick when done, a lit orange node at your current step, a ring still to do, a
+  dash when skipped. Badges at the end of a row mark a quest step, the items it needs, and a map point.
+- **The current step** opens as a card beside the line: its text, how to do it, a tip, what an Ironman does instead,
+  where to go, and its rewards. Each item to bring is one short line with its game sprite and a tag saying where it
+  is: INVENTORY, BANK or DON'T HAVE. Items to pick up on the way carry the same tags and say where from.
+  Requirements are checked against your skills, quests, quest points and account type: green met, red not yet. A
+  large **Mark done** button finishes it, and any other step opens the same way with a click.
+- **An account that is not new starts where it is.** The plugin reads your quests, levels and bank, and your place is
+  the first section of the guide you have not mostly finished: earlier steps the game cannot check count as done,
+  earlier ones it shows are not done are flagged as behind you, and a quest done early, far ahead, does not move it.
+  **Start here** sets your place by hand.
+- **Mark done**, **Skip** and **Reopen** mark a step. A step the site says is complete once you reach a level or
+  finish a quest ticks itself, and so does a step to talk to someone, kill something, reach a place or get items,
+  once your client sees it happen; the guide then moves on. The count, such as "5/43", leaves skipped steps out, as
+  the site does.
+- **On the game screen,** as Quest Helper does: a box with the current step, where it is and what you still need to
+  bring, the step's tile outlined once it is in view, a minimap arrow toward it, and a world map point. **Walk
+  there** routes you with Shortest Path.
+- **Quest steps go to Quest Helper** when it is on. Before the quest starts, the step leads you to its start and
+  says how Quest Helper starts: by itself when you start the quest (its "Auto start helper" setting), or from the
+  Quest List with a right-click on the quest and **Start Quest Helper**. Once the quest is under way, this plugin's
+  box, tile, map point and arrow step aside, and the guide moves on when the quest is finished. Quest Helper cannot yet be
+  started by another plugin, so **Follow with Quest Helper** puts the manual way in chat.
+- **Your progress stays on your computer,** in your RuneLite profile, per character. Nothing about it is sent.
+- **Downloads only when you open it.** The list is fetched when you open the tab, at most once an hour, and a guide
+  when you open it. Guides are public, so this works without linking, and the requests carry no token and nothing
+  about your character.
+
+<p align="center">
+  <img src="images/step-box.png" width="216" alt="The step box on the game screen: the guide, its count, the current step, Quest Helper's part, the step's text, where it is and an item still to bring" />
+</p>
 
 <br clear="right" />
 
@@ -202,6 +255,12 @@ on Shortest Path from the Plugin Hub.
 | *What to sync:* **Collection log** | on | The collection log. |
 | *What to sync:* **Location** | on | Your position and world. |
 | *Walk here from the site:* **Receive destinations** | on | The relay connection that receives places from the site's map. |
+| *Guides:* **Show guides** | on | The Guides tab. Off, nothing is downloaded for guides, and there is no map point or arrow. |
+| *Guides:* **World map marker** | on | The current step's point on the world map. |
+| *Guides:* **Minimap arrow** | on | The arrow on the minimap toward the current step's place. |
+| *Guides:* **Tile highlight** | on | The outline on the current step's tile in the game world. |
+| *Guides:* **Step box** | on | The box with the current step on the game screen. |
+| *Guides:* **Hand quest steps to Quest Helper** | on | Let Quest Helper guide a guide's quest steps while it is on. |
 
 ## Chat messages
 
@@ -223,6 +282,9 @@ Every line starts with "OSRS Index:", except the two that start "osrsindex.com".
 | Your osrsindex.com account already tracks the most characters it can… | The account is full, so this character was not synced. Delete tracker data on your account page to make room; the plugin tries again every 15 minutes. |
 | osrsindex.com: routing to PLACE (x, y, plane) with Shortest Path. | A place you sent from the site's map is being routed. |
 | osrsindex.com sent PLACE (x, y, plane), but Shortest Path is not on. | Install or turn on Shortest Path, then send the place again. |
+| Routing to PLACE (x, y, plane) with Shortest Path. | You clicked **Walk there** on a guide step. |
+| Shortest Path is not on, so the way to PLACE (x, y, plane) cannot be drawn… | **Walk there** needs Shortest Path. Install or turn it on, then click again. |
+| Asked Quest Helper to show QUEST. If it does not, open the Quest List… | You clicked **Follow with Quest Helper**. Start it from the Quest List if it did not open. |
 
 ## Building from source
 

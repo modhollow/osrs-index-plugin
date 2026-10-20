@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "id": "beginner",
+  "title": "Beginner walkthrough",
+  "summary": "From a new account to your first quests, levels and coins.",
+  "kind": "start",
+  "membership": "free",
+  "modes": null,
+  "attribution": "Sample attribution line.",
+  "revision": "3f2a9c1e",
+  "a_field_from_a_later_site": {"anything": [1, 2, 3]},
+  "sections": [
+    {
+      "id": "lumbridge",
+      "title": "Lumbridge",
+      "summary": "Your first quests.",
+      "steps": [
+        {
+          "id": "cooks-assistant",
+          "title": "Cook's Assistant",
+          "minutes": 10,
+          "url": "https://osrsindex.com/guides/beginner/cooks-assistant",
+          "text": "Help the Lumbridge cook bake a cake.",
+          "how": ["Talk to the cook in the castle kitchen.", "Bring a bucket of milk, a pot of flour and an egg."],
+          "tip": "The dairy cow is north of the castle.",
+          "ironman": "Fill the bucket yourself at the dairy cow.",
+          "tags": ["solo"],
+          "quests": ["Cook's Assistant"],
+          "places": [
+            { "label": "Lumbridge Castle kitchen", "x": 3208, "y": 3214, "plane": 0 },
+            { "label": "Anvils" }
+          ],
+          "travel": [
+            { "by": "teleport", "label": "Home teleport to Lumbridge", "x": 3222, "y": 3218, "plane": 0 }
+          ],
+          "bring": [{ "name": "Bucket", "id": 1925, "qty": 1 }, { "name": "Pot", "qty": 1 }],
+          "collect": [
+            { "item": { "name": "Egg", "id": 1944 }, "for": ["Cook's Assistant"], "from": "Chicken farm" }
+          ],
+          "requires": [
+            { "kind": "skill", "skill": "cooking", "level": 1, "boostable": true }
+          ],
+          "completes": [{ "kind": "quest", "quest": "Cook's Assistant" }],
+          "rewards": {
+            "xp": [{ "skill": "cooking", "amount": 300 }],
+            "quest_points": 1,
+            "coins": 0,
+            "items": [],
+            "unlocks": ["Use of the cook's range."]
+          },
+          "a_step_field_from_a_later_site": true
+        },
+        {
+          "id": "sheep-shearer",
+          "title": "Sheep Shearer",
+          "text": "Shear sheep and spin the wool.",
+          "quests": ["Sheep Shearer"],
+          "places": [{ "label": "Fred the Farmer", "x": 3190, "y": 3273, "plane": 0 }]
+        },
+        {
+          "id": "mining-instructor",
+          "title": "Meet the Mining Instructor",
+          "text": "Learn to mine and smith.",
+          "places": [{ "label": "Mining Instructor" }],
+          "tags": ["optional", "a_tag_from_a_later_site"]
+        }
+      ]
+    },
+    {
+      "id": "levels",
+      "title": "First levels",
+      "steps": [
+        {
+          "id": "cooking-10",
+          "title": "Reach 10 Cooking",
+          "text": "Cook shrimp on the range.",
+          "requires": [
+            { "kind": "quest", "quest": "Cook's Assistant" },
+            { "kind": "quest_points", "points": 1 },
+            { "kind": "mode", "modes": ["ironman", "hardcore_ironman"] },
+            { "kind": "a_kind_from_a_later_site", "value": 3 }
+          ],
+          "completes": [{ "kind": "skill", "skill": "cooking", "level": 10 }],
+          "places": [{ "label": "Wizards' Tower basement", "x": 3104, "y": 9576, "plane": 0 }]
+        },
+        {
+          "id": "risky-step",
+          "title": "Kill a goblin",
+          "tags": ["risk"],
+          "places": [{ "label": "Goblins", "x": 3250, "y": 3235, "plane": 0 }]
+        }
+      ]
+    }
+  ]
+}

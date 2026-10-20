@@ -191,6 +191,30 @@ public class SiteHttpTest
 	}
 
 	@Test
+	public void guideRequestsNameThePluginVersionAndCarryNoToken() throws Exception
+	{
+		GuideFetcher fetcher = new GuideFetcher(site("{\"version\":1,\"guides\":[]}", "{}"));
+		fetcher.listing(answer ->
+		{
+		});
+		fetcher.guide("beginner", null, answer ->
+		{
+		});
+		awaitRequests(2);
+
+		List<String> urls = new ArrayList<>();
+		for (Request request : seen)
+		{
+			urls.add(request.url().toString());
+			assertEquals("GET", request.method());
+			assertNull(request.header("Authorization"));
+			assertEquals(OsrsIndexPlugin.VERSION, request.header(SiteHttp.VERSION_HEADER));
+		}
+		assertTrue(urls.contains(Endpoints.guides()));
+		assertTrue(urls.contains(Endpoints.guide("beginner")));
+	}
+
+	@Test
 	public void theSharedClientIsLeftAsItWasAndItsPoolIsShared() throws Exception
 	{
 		OkHttpClient site = SiteHttp.derive(shared, OsrsIndexPlugin.VERSION);

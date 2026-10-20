@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "guides": [
+    {
+      "id": "beginner",
+      "title": "Beginner walkthrough",
+      "summary": "From a new account to your first quests, levels and coins.",
+      "kind": "start",
+      "membership": "free",
+      "modes": null,
+      "steps": 5,
+      "minutes": 540,
+      "revision": "3f2a9c1e"
+    },
+    {
+      "id": "ironman",
+      "title": "Ironman route",
+      "summary": "An efficient early route for an Ironman.",
+      "kind": "start",
+      "membership": "members",
+      "modes": ["ironman", "hardcore_ironman"],
+      "steps": 120,
+      "minutes": 3000,
+      "revision": "9b81d0aa",
+      "a_field_from_a_later_site": "ignored"
+    }
+  ]
+}

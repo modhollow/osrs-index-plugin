@@ -48,6 +48,18 @@ final class Endpoints
 		return origin() + "/api/v1/tracker/plugin-config";
 	}
 
+	/** Every guide the site offers in game: a public {@code GET} (docs/guides.md). */
+	static String guides()
+	{
+		return origin() + "/api/v1/guides";
+	}
+
+	/** One guide, whole: a public {@code GET}. {@code id} is a slug ({@link GuideParser#GUIDE_ID}). */
+	static String guide(String id)
+	{
+		return guides() + "/" + encode(id);
+	}
+
 	/** Where Unlink revokes this client's token: a {@code DELETE} with the token as a bearer. */
 	static String revokeToken()
 	{
