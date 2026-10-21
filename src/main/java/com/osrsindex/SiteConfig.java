@@ -55,7 +55,9 @@ final class SiteConfig
 	 * ({@link GameVars#EXCLUDED_VARBIT_IDS}), so the site cannot send one under another name.
 	 */
 	static final Pattern EXCLUDED_VAR = Pattern.compile("^LEAGUE|_LEAGUE|^POH_|SETTINGS|_TEMP$|_TMP$|DEBUG|TOGGLE|HIDE"
-		+ "|FILTER|SELECTED|SCROLL|_MENU|_UI_|_INTERFACE|_TAB$|_TAB_", Pattern.CASE_INSENSITIVE);
+		+ "|FILTER|SELECTED|SCROLL|_MENU|_UI_|_INTERFACE|_TAB$|_TAB_"
+		+ "|^OPTION_|QUESTLIST_|REQUESTEDQUANTITY|WORLDSWITCHER|COLOUR|_PROMPT|BANNED|BANKPIN|^ACCOUNT_|LOGIN"
+		+ "|DISPLAYNAME|BOND|PURGEIGNORED|^CHAT_", Pattern.CASE_INSENSITIVE);
 
 	static final SiteConfig DEFAULTS = new SiteConfig(0, DEFAULT_REFRESH_SECONDS, Part.LATEST_SCHEMA, Timing.DEFAULTS,
 		EnumSet.noneOf(Part.class), true, Vars.BUILT_IN, null);
@@ -183,8 +185,10 @@ final class SiteConfig
 			Map<String, Integer> varbits = replace ? new LinkedHashMap<>() : map(GameVars.VARBIT_NAMES, GameVars.VARBIT_IDS);
 			Map<String, Integer> varps = replace ? new LinkedHashMap<>() : map(GameVars.VARP_NAMES, GameVars.VARP_IDS);
 			int[] size = {estimate(varbits) + estimate(varps)};
-			addFrom(object(json, "varbits"), MAX_SITE_VARBITS, GameVars.EXCLUDED_VARBIT_IDS, varbits, size);
-			addFrom(object(json, "varps"), MAX_SITE_VARPS, GameVars.EXCLUDED_VARP_IDS, varps, size);
+			addFrom(object(json, "varbits"), MAX_SITE_VARBITS, GameVars.EXCLUDED_VARBIT_IDS, GameVars.VARBIT_NAMES,
+				GameVars.VARBIT_IDS, GameVars.MAX_KNOWN_VARBIT_ID, varbits, size);
+			addFrom(object(json, "varps"), MAX_SITE_VARPS, GameVars.EXCLUDED_VARP_IDS, GameVars.VARP_NAMES,
+				GameVars.VARP_IDS, GameVars.MAX_KNOWN_VARP_ID, varps, size);
 			List<String> varbitNames = new ArrayList<>(varbits.keySet());
 			List<String> varpNames = new ArrayList<>(varps.keySet());
 			Vars vars = new Vars(varbitNames.toArray(new String[0]), ids(varbits), varpNames.toArray(new String[0]), ids(varps));
@@ -214,9 +218,11 @@ final class SiteConfig
 
 		/**
 		 * The site's usable entries, at most {@code limit}, while the part stays within {@link #MAX_VARS_BYTES}: a
-		 * name it may ask for, neither excluded nor reserved, and a whole ID in range that no excluded name has.
+		 * name it may ask for, neither excluded nor reserved, and a whole ID in range that no excluded name has and
+		 * that {@link #allowed} lets through.
 		 */
-		private static void addFrom(JsonObject site, int limit, int[] excludedIds, Map<String, Integer> into, int[] size)
+		private static void addFrom(JsonObject site, int limit, int[] excludedIds, String[] knownNames, int[] knownIds,
+			int maxKnownId, Map<String, Integer> into, int[] size)
 		{
 			if (site == null)
 			{
@@ -232,7 +238,8 @@ final class SiteConfig
 				String name = entry.getKey();
 				Integer id = wholeNumber(entry.getValue());
 				if (!VAR_NAME.matcher(name).matches() || EXCLUDED_VAR.matcher(name).find() || RESERVED_VAR.matcher(name).find()
-					|| id == null || id < 0 || id > MAX_VAR_ID || Arrays.binarySearch(excludedIds, id) >= 0)
+					|| id == null || id < 0 || id > MAX_VAR_ID || Arrays.binarySearch(excludedIds, id) >= 0
+					|| !allowed(name, id, knownNames, knownIds, maxKnownId))
 				{
 					continue;
 				}
@@ -245,6 +252,38 @@ final class SiteConfig
 				size[0] += grows;
 				taken++;
 			}
+		}
+
+		/**
+		 * A var this plugin's game data names goes only under that name, and only when the built-in list has it: the
+		 * site cannot read an account or settings value by giving its ID a progress name. A var newer than that data
+		 * goes only under a progress name, so a new quest or minigame can still be added from the site.
+		 */
+		static boolean allowed(String name, int id, String[] knownNames, int[] knownIds, int maxKnownId)
+		{
+			if (id > maxKnownId)
+			{
+				return GameVars.PROGRESS_NAME.matcher(name).find();
+			}
+			// The IDs are sorted; one ID may carry more than one name, so look either side of the match.
+			int at = Arrays.binarySearch(knownIds, id);
+			if (at < 0)
+			{
+				return false;
+			}
+			int first = at;
+			while (first > 0 && knownIds[first - 1] == id)
+			{
+				first--;
+			}
+			for (int i = first; i < knownIds.length && knownIds[i] == id; i++)
+			{
+				if (knownNames[i].equals(name))
+				{
+					return true;
+				}
+			}
+			return false;
 		}
 
 		private static int[] ids(Map<String, Integer> entries)
@@ -363,7 +402,7 @@ final class SiteConfig
 		int[] count = {0};
 		raw.codePoints()
 			.map(codePoint -> Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint) ? ' ' : codePoint)
-			.filter(codePoint -> !Character.isISOControl(codePoint))
+			.filter(codePoint -> !Character.isISOControl(codePoint) && Character.getType(codePoint) != Character.FORMAT)
 			.forEach(codePoint ->
 			{
 				boolean space = codePoint == ' ';

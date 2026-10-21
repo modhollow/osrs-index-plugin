@@ -2,7 +2,9 @@ package com.osrsindex;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.IntPredicate;
 import java.util.function.ToIntFunction;
@@ -59,8 +61,14 @@ final class Guide
 	 * {@code lookup} (the game's id, or -1 when it knows none), and which items cannot be traded, from
 	 * {@code untradeable}. An id the site gave is kept. Returns this guide when nothing changes.
 	 */
-	Guide withItemFacts(ToIntFunction<String> lookup, IntPredicate untradeable)
+	Guide withItemFacts(ToIntFunction<String> nameLookup, IntPredicate untradeableLookup)
 	{
+		// Each name and id is looked up once: a guide can name the same item hundreds of times, and this runs on the
+		// client thread.
+		Map<String, Integer> ids = new HashMap<>();
+		Map<Integer, Boolean> bound = new HashMap<>();
+		ToIntFunction<String> lookup = name -> ids.computeIfAbsent(name, nameLookup::applyAsInt);
+		IntPredicate untradeable = id -> bound.computeIfAbsent(id, untradeableLookup::test);
 		boolean changed = false;
 		List<Section> filled = new ArrayList<>();
 		for (Section section : sections)

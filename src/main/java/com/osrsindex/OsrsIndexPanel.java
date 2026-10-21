@@ -93,6 +93,8 @@ class OsrsIndexPanel extends PluginPanel
 		code.setFont(FontManager.getRunescapeBoldFont().deriveFont(Font.BOLD, 20f));
 		code.setForeground(ColorScheme.BRAND_ORANGE);
 		code.setBorder(BorderFactory.createEmptyBorder(8, 0, 8, 0));
+		// The code comes from the site: shown as text, never as HTML.
+		code.putClientProperty("html.disable", Boolean.TRUE);
 		sync.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		destinations.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		notice.setForeground(ColorScheme.BRAND_ORANGE);

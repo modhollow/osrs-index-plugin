@@ -157,13 +157,13 @@ public class SiteConfigTest
 	public void addKeepsTheBuiltInListAndAppendsTheSitesVars()
 	{
 		SiteConfig.Vars vars = parse("{\"vars\":{\"varbits\":{\"SOME_NEW_QUEST\":20512},"
-			+ "\"varps\":{\"SOME_NEW_MINIGAME_POINTS\":4100}}}").vars;
+			+ "\"varps\":{\"SOME_NEW_MINIGAME_POINTS\":6100}}}").vars;
 		assertEquals(GameVars.VARBIT_IDS.length + 1, vars.varbitIds.length);
 		assertEquals(GameVars.VARP_IDS.length + 1, vars.varpIds.length);
 		assertEquals("SOME_NEW_QUEST", vars.varbitNames[vars.varbitNames.length - 1]);
 		assertEquals(20_512, vars.varbitIds[vars.varbitIds.length - 1]);
 		assertEquals("SOME_NEW_MINIGAME_POINTS", vars.varpNames[vars.varpNames.length - 1]);
-		assertEquals(4_100, vars.varpIds[vars.varpIds.length - 1]);
+		assertEquals(6_100, vars.varpIds[vars.varpIds.length - 1]);
 		assertArrayEquals(GameVars.VARBIT_NAMES, Arrays.copyOf(vars.varbitNames, GameVars.VARBIT_NAMES.length));
 	}
 
@@ -171,18 +171,18 @@ public class SiteConfigTest
 	public void aNameInBothListsTakesTheSitesId()
 	{
 		String name = GameVars.VARBIT_NAMES[0];
-		SiteConfig.Vars vars = parse("{\"vars\":{\"varbits\":{\"" + name + "\":12345}}}").vars;
+		SiteConfig.Vars vars = parse("{\"vars\":{\"varbits\":{\"" + name + "\":30000}}}").vars;
 		assertEquals(GameVars.VARBIT_IDS.length, vars.varbitIds.length);
 		assertEquals(name, vars.varbitNames[0]);
-		assertEquals(12_345, vars.varbitIds[0]);
+		assertEquals(30_000, vars.varbitIds[0]);
 	}
 
 	@Test
 	public void replaceSendsOnlyTheSitesVars()
 	{
-		SiteConfig.Vars vars = parse("{\"vars\":{\"mode\":\"replace\",\"varbits\":{\"QUEST_A\":1,\"QUEST_B\":2}}}").vars;
+		SiteConfig.Vars vars = parse("{\"vars\":{\"mode\":\"replace\",\"varbits\":{\"QUEST_A\":30001,\"QUEST_B\":30002}}}").vars;
 		assertArrayEquals(new String[]{"QUEST_A", "QUEST_B"}, vars.varbitNames);
-		assertArrayEquals(new int[]{1, 2}, vars.varbitIds);
+		assertArrayEquals(new int[]{30_001, 30_002}, vars.varbitIds);
 		assertEquals(0, vars.varpIds.length);
 	}
 
@@ -198,13 +198,13 @@ public class SiteConfigTest
 	public void namesAndIdsTheSiteMayNotAskForAreRefused()
 	{
 		SiteConfig.Vars vars = parse("{\"vars\":{\"mode\":\"replace\",\"varbits\":{"
-			+ "\"OK_QUEST\":1,"
+			+ "\"OK_QUEST\":30001,"
 			+ "\"SETTINGS_SOUND\":2,\"POH_THRONE\":3,\"LEAGUE_POINTS\":4,\"QUEST_DEBUG\":5,\"BANK_TAB_2\":6,"
 			+ "\"lower case ok?\":7,\"\":8,\"" + "A".repeat(81) + "\":9,"
 			+ "\"NEGATIVE\":-1,\"TOO_BIG\":65536,\"FRACTION\":1.5,\"TEXT_ID\":\"12\","
-			+ "\"OK_TOO\":65535}}}").vars;
-		assertArrayEquals(new String[]{"OK_QUEST", "OK_TOO"}, vars.varbitNames);
-		assertArrayEquals(new int[]{1, 65_535}, vars.varbitIds);
+			+ "\"OK_TOO_QUEST\":65535}}}").vars;
+		assertArrayEquals(new String[]{"OK_QUEST", "OK_TOO_QUEST"}, vars.varbitNames);
+		assertArrayEquals(new int[]{30_001, 65_535}, vars.varbitIds);
 	}
 
 	@Test
@@ -300,26 +300,40 @@ public class SiteConfigTest
 		StringBuilder varbits = new StringBuilder();
 		for (int i = 0; i < SiteConfig.MAX_SITE_VARBITS + 10; i++)
 		{
-			varbits.append(i == 0 ? "" : ",").append("\"V").append(i).append("\":").append(30_000 + i);
+			varbits.append(i == 0 ? "" : ",").append("\"QUEST_V").append(i).append("\":").append(30_000 + i);
 		}
 		StringBuilder varps = new StringBuilder();
 		for (int i = 0; i < SiteConfig.MAX_SITE_VARPS + 10; i++)
 		{
-			varps.append(i == 0 ? "" : ",").append("\"P").append(i).append("\":").append(10_000 + i);
+			varps.append(i == 0 ? "" : ",").append("\"QUEST_P").append(i).append("\":").append(10_000 + i);
 		}
 		SiteConfig.Vars vars = parse("{\"vars\":{\"mode\":\"replace\",\"varbits\":{" + varbits + "},\"varps\":{"
 			+ varps + "}}}").vars;
 		assertEquals(SiteConfig.MAX_SITE_VARBITS, vars.varbitIds.length);
 		assertEquals(SiteConfig.MAX_SITE_VARPS, vars.varpIds.length);
-		assertEquals("V0", vars.varbitNames[0]);
+		assertEquals("QUEST_V0", vars.varbitNames[0]);
+	}
+
+	@Test
+	public void aKnownIdGoesOnlyUnderItsOwnNameAndOnlyFromTheBuiltInList()
+	{
+		String name = GameVars.VARBIT_NAMES[0];
+		int id = GameVars.VARBIT_IDS[0];
+		// 563 and 1780 are the bank PIN and account credit varps: never sent, whatever the site names them.
+		SiteConfig.Vars vars = parse("{\"vars\":{\"mode\":\"replace\",\"varbits\":{\"" + name + "\":" + id
+			+ ",\"QUEST_RENAMED\":" + id + ",\"QUEST_OPTION\":1},\"varps\":{\"QUEST_X\":563,\"QUEST_Y\":1780,"
+			+ "\"OPTION_NEW_QUEST\":7000,\"NEW_THING\":7001}}}").vars;
+		assertArrayEquals(new String[]{name}, vars.varbitNames);
+		assertArrayEquals(new int[]{id}, vars.varbitIds);
+		assertEquals(0, vars.varpIds.length);
 	}
 
 	@Test
 	public void sameAsComparesTheWholeSelection()
 	{
-		SiteConfig.Vars a = parse("{\"vars\":{\"mode\":\"replace\",\"varbits\":{\"Q\":1}}}").vars;
-		SiteConfig.Vars b = parse("{\"vars\":{\"mode\":\"replace\",\"varbits\":{\"Q\":1}}}").vars;
-		SiteConfig.Vars c = parse("{\"vars\":{\"mode\":\"replace\",\"varbits\":{\"Q\":2}}}").vars;
+		SiteConfig.Vars a = parse("{\"vars\":{\"mode\":\"replace\",\"varbits\":{\"QUEST_Q\":30001}}}").vars;
+		SiteConfig.Vars b = parse("{\"vars\":{\"mode\":\"replace\",\"varbits\":{\"QUEST_Q\":30001}}}").vars;
+		SiteConfig.Vars c = parse("{\"vars\":{\"mode\":\"replace\",\"varbits\":{\"QUEST_Q\":30002}}}").vars;
 		assertTrue(a.sameAs(b));
 		assertFalse(a.sameAs(c));
 		assertFalse(a.sameAs(SiteConfig.Vars.BUILT_IN));

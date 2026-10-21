@@ -153,7 +153,7 @@ final class DestinationSocket
 	 */
 	static boolean shouldListen(boolean optedIn, String token, boolean loggedIn)
 	{
-		return optedIn && loggedIn && token != null && token.startsWith(OsrsIndexPlugin.TOKEN_PREFIX);
+		return optedIn && loggedIn && Tokens.wellFormed(token);
 	}
 
 	/**

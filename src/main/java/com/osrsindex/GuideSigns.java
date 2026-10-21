@@ -28,7 +28,7 @@ final class GuideSigns
 		Collections.emptyList());
 
 	private static final Pattern TALK = Pattern.compile("^(?:talk to|speak to|speak with|meet|ask)\\s+(.+)$");
-	private static final Pattern KILL = Pattern.compile("^(?:kill|defeat|slay)\\s+(?:(\\d+)\\s+)?(.+)$");
+	static final Pattern KILL = Pattern.compile("^(?:kill|defeat|slay)\\s+(?:(\\d{1,4})\\s+)?(.+)$");
 	private static final Pattern REACH = Pattern.compile(
 		"^(?:go to|walk to|run to|travel to|head to|teleport to|return to|go back to)\\s+.+$");
 	private static final Pattern GET = Pattern.compile("^(?:get|buy|collect|pick up|gather|grab|take)\\s+.+$");

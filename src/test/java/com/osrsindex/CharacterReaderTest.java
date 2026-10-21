@@ -168,11 +168,11 @@ public class CharacterReaderTest
 		assertEquals(GameVars.VARBIT_IDS[0] + 1, builtIn.get(GameVars.VARBIT_NAMES[0]).getAsInt());
 
 		SiteConfig.Vars site = SiteConfig.parse("{\"vars\":{\"mode\":\"replace\",\"varbits\":{\"NEW_QUEST\":20512},"
-			+ "\"varps\":{\"NEW_POINTS\":4100}}}").vars;
+			+ "\"varps\":{\"NEW_MINIGAME_POINTS\":6100}}}").vars;
 		JsonObject chosen = reader.vars(3, site);
 		assertEquals(2, chosen.size());
 		assertEquals(20_513, chosen.get("NEW_QUEST").getAsInt());
-		assertEquals(4_102, chosen.get("NEW_POINTS").getAsInt());
+		assertEquals(6_102, chosen.get("NEW_MINIGAME_POINTS").getAsInt());
 	}
 
 	@Test
@@ -192,12 +192,12 @@ public class CharacterReaderTest
 		{
 			throw new ArrayIndexOutOfBoundsException("no such varp");
 		});
-		SiteConfig.Vars site = SiteConfig.parse("{\"vars\":{\"mode\":\"replace\",\"varbits\":{\"BAD\":60000,"
-			+ "\"GOOD\":1},\"varps\":{\"ALSO_BAD\":65000}}}").vars;
+		SiteConfig.Vars site = SiteConfig.parse("{\"vars\":{\"mode\":\"replace\",\"varbits\":{\"BAD_QUEST\":60000,"
+			+ "\"GOOD_QUEST\":30001},\"varps\":{\"ALSO_BAD_QUEST\":65000}}}").vars;
 
 		JsonObject first = reader.vars(3, site);
 		assertEquals(1, first.size());
-		assertEquals(1, first.get("GOOD").getAsInt());
+		assertEquals(1, first.get("GOOD_QUEST").getAsInt());
 		assertEquals(2, reads[0]);
 
 		JsonObject second = reader.vars(3, site);

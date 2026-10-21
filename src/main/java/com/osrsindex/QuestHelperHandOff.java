@@ -209,7 +209,7 @@ final class QuestHelperHandOff
 		Map<String, Object> data = new HashMap<>();
 		data.put("quest", helperName);
 		data.put("source", SOURCE);
-		return new PluginMessage(NAMESPACE, START, data);
+		return new PluginMessage(NAMESPACE, START, Collections.unmodifiableMap(data));
 	}
 
 	/** Quest Helper's {@code selected} message, as proposed: the helper it shows, or null when it shows none. */

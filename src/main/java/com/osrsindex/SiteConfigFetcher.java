@@ -1,16 +1,15 @@
 package com.osrsindex;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.function.Consumer;
 import java.util.function.LongSupplier;
+import okhttp3.CacheControl;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
-import okio.BufferedSource;
 
 /**
  * Keeps this client's {@link SiteConfig} from osrsindex.com (docs/site-config.md). It asks only while the client is
@@ -109,7 +108,7 @@ final class SiteConfigFetcher
 				}
 			}
 			long now = clock.getAsLong();
-			boolean ask = token.startsWith(OsrsIndexPlugin.TOKEN_PREFIX) && !inFlight && now >= nextAskAtMillis;
+			boolean ask = Tokens.wellFormed(token) && !inFlight && now >= nextAskAtMillis;
 			if (ask)
 			{
 				inFlight = true;
@@ -206,6 +205,8 @@ final class SiteConfigFetcher
 				.url(url)
 				.header("Authorization", "Bearer " + token)
 				.header("Accept", "application/json")
+				// Always from the site: the shared client's disk cache keys by address, not by token.
+				.cacheControl(CacheControl.FORCE_NETWORK)
 				.get()
 				.build();
 			http.newCall(request).enqueue(new Callback()
@@ -246,15 +247,6 @@ final class SiteConfigFetcher
 	 */
 	static String bounded(ResponseBody body) throws IOException
 	{
-		if (body.contentLength() > MAX_BODY_BYTES)
-		{
-			return null;
-		}
-		BufferedSource source = body.source();
-		if (source.request(MAX_BODY_BYTES + 1L))
-		{
-			return null;
-		}
-		return source.getBuffer().readString(StandardCharsets.UTF_8);
+		return SiteHttp.bounded(body, MAX_BODY_BYTES);
 	}
 }

@@ -89,7 +89,7 @@ final class StorageTracker
 			{
 				if (STORES.containsKey(entry.getKey()) && entry.getValue().isJsonArray())
 				{
-					stores.put(entry.getKey(), entry.getValue().getAsJsonArray());
+					stores.put(entry.getKey(), items(entry.getValue().getAsJsonArray()));
 				}
 			}
 		}
@@ -97,5 +97,41 @@ final class StorageTracker
 		{
 			// A malformed profile value loads as empty.
 		}
+	}
+
+	/**
+	 * A saved store's items as the reader writes them, and nothing else: an edited or damaged profile cannot put
+	 * anything else into the sync.
+	 */
+	static JsonArray items(JsonArray saved)
+	{
+		JsonArray out = new JsonArray();
+		for (JsonElement element : saved)
+		{
+			if (out.size() >= CharacterReader.MAX_BANK_ITEMS)
+			{
+				break;
+			}
+			if (!element.isJsonObject())
+			{
+				continue;
+			}
+			JsonObject item = element.getAsJsonObject();
+			JsonElement id = item.get("id");
+			JsonElement quantity = item.get("quantity");
+			if (id == null || quantity == null || !id.isJsonPrimitive() || !quantity.isJsonPrimitive()
+				|| !id.getAsJsonPrimitive().isNumber() || !quantity.getAsJsonPrimitive().isNumber())
+			{
+				continue;
+			}
+			double idValue = id.getAsDouble();
+			double quantityValue = quantity.getAsDouble();
+			if (idValue >= 0 && idValue <= CharacterReader.MAX_ITEM_ID && idValue == Math.rint(idValue)
+				&& quantityValue > 0 && quantityValue <= Integer.MAX_VALUE && quantityValue == Math.rint(quantityValue))
+			{
+				out.add(CharacterReader.itemJson((int) idValue, (int) quantityValue));
+			}
+		}
+		return out;
 	}
 }

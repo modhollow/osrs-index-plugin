@@ -2,6 +2,7 @@ package com.osrsindex;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.regex.Pattern;
 
 /**
  * Where the site is. Production unless `-Dosrsindex.origin=http://localhost:5173` points it at a local
@@ -19,13 +20,27 @@ final class Endpoints
 
 	static String origin()
 	{
-		String origin = System.getProperty("osrsindex.origin", DEFAULT_ORIGIN).trim();
-		while (origin.endsWith("/"))
-		{
-			origin = origin.substring(0, origin.length() - 1);
-		}
-		return origin.isEmpty() ? DEFAULT_ORIGIN : origin;
+		return override("osrsindex.origin", DEFAULT_ORIGIN, "https://", "http://");
 	}
+
+	/**
+	 * A development override, or {@code fallback}. The token goes to it, so it must be encrypted ({@code secure}) or
+	 * this computer ({@code plain} to localhost); anything else is ignored.
+	 */
+	static String override(String property, String fallback, String secure, String plain)
+	{
+		String value = System.getProperty(property, fallback).trim();
+		while (value.endsWith("/"))
+		{
+			value = value.substring(0, value.length() - 1);
+		}
+		boolean local = LOCAL.matcher(value).matches() && value.startsWith(plain);
+		boolean encrypted = value.startsWith(secure) && value.length() > secure.length();
+		return encrypted || local ? value : fallback;
+	}
+
+	/** {@code http://localhost}, {@code 127.0.0.1} or {@code [::1]}, with a port or none. */
+	private static final Pattern LOCAL = Pattern.compile("[a-z]+://(localhost|127\\.0\\.0\\.1|\\[::1])(:\\d{1,5})?");
 
 	static String sync()
 	{
@@ -69,12 +84,7 @@ final class Endpoints
 	/** The WebSocket the site pushes map places down. */
 	static String destinations()
 	{
-		String relay = System.getProperty("osrsindex.relay", DEFAULT_RELAY).trim();
-		while (relay.endsWith("/"))
-		{
-			relay = relay.substring(0, relay.length() - 1);
-		}
-		return (relay.isEmpty() ? DEFAULT_RELAY : relay) + "/v1/destinations";
+		return override("osrsindex.relay", DEFAULT_RELAY, "wss://", "ws://") + "/v1/destinations";
 	}
 
 	/** The page a player opens to approve a link code. */

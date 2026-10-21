@@ -146,7 +146,8 @@ final class RouteDispatcher
 		{
 			return new Result(Kind.ALREADY_ROUTED, null, null, destination.id);
 		}
-		if (clock.instant().isAfter(destination.expiresAt.plus(CLOCK_SKEW)))
+		// The skew comes off now, not onto expires_at, which may be as late as Instant allows.
+		if (clock.instant().minus(CLOCK_SKEW).isAfter(destination.expiresAt))
 		{
 			return new Result(Kind.EXPIRED, null, null, destination.id);
 		}
@@ -163,7 +164,8 @@ final class RouteDispatcher
 
 		Map<String, Object> data = new HashMap<>();
 		data.put(TARGET, new WorldPoint(destination.x, destination.y, destination.plane));
-		post.accept(new PluginMessage(plugin.namespace, PATH, data));
+		// Read-only, so a plugin that sees it first cannot change the target before the pathing plugin does.
+		post.accept(new PluginMessage(plugin.namespace, PATH, Collections.unmodifiableMap(data)));
 		routedIds.add(destination.id);
 		return new Result(Kind.ROUTED, plugin,
 			"osrsindex.com: routing to " + place + " with " + plugin.displayName + ".", destination.id);
@@ -202,7 +204,7 @@ final class RouteDispatcher
 	{
 		StringBuilder printable = new StringBuilder(label.length());
 		label.codePoints()
-			.filter(codePoint -> !Character.isISOControl(codePoint))
+			.filter(codePoint -> !Character.isISOControl(codePoint) && Character.getType(codePoint) != Character.FORMAT)
 			.forEach(printable::appendCodePoint);
 		return Text.escapeJagex(printable.toString());
 	}

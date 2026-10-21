@@ -1,9 +1,12 @@
 package com.osrsindex;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import okhttp3.Interceptor;
 import okhttp3.OkHttpClient;
 import okhttp3.Response;
+import okhttp3.ResponseBody;
+import okio.BufferedSource;
 
 /**
  * The HTTP client for every request this plugin makes to osrsindex.com: the sync, link start, link poll and
@@ -26,10 +29,33 @@ final class SiteHttp
 	{
 	}
 
-	/** A client for osrsindex.com, derived from {@code shared}, that sends {@code version} on every request. */
+	/**
+	 * A client for osrsindex.com, derived from {@code shared}, that sends {@code version} on every request. It follows
+	 * no redirect: a sync redirected elsewhere would arrive as a GET whose answer could read as stored, and every
+	 * route the plugin uses answers where it is asked.
+	 */
 	static OkHttpClient derive(OkHttpClient shared, String version)
 	{
-		return shared.newBuilder().addInterceptor(new VersionHeader(version)).build();
+		return shared.newBuilder()
+			.followRedirects(false)
+			.followSslRedirects(false)
+			.addInterceptor(new VersionHeader(version))
+			.build();
+	}
+
+	/** An answer's body as text, or null when it is over {@code maxBytes}: it is never read whole into memory. */
+	static String bounded(ResponseBody body, long maxBytes) throws IOException
+	{
+		if (body.contentLength() > maxBytes)
+		{
+			return null;
+		}
+		BufferedSource source = body.source();
+		if (source.request(maxBytes + 1L))
+		{
+			return null;
+		}
+		return source.getBuffer().readString(StandardCharsets.UTF_8);
 	}
 
 	/**

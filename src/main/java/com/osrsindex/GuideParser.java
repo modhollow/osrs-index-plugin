@@ -522,7 +522,7 @@ final class GuideParser
 		int[] count = {0};
 		raw.codePoints()
 			.map(codePoint -> Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint) ? ' ' : codePoint)
-			.filter(codePoint -> !Character.isISOControl(codePoint))
+			.filter(codePoint -> !Character.isISOControl(codePoint) && Character.getType(codePoint) != Character.FORMAT)
 			.forEach(codePoint ->
 			{
 				boolean space = codePoint == ' ';

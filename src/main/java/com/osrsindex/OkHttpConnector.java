@@ -16,6 +16,12 @@ import okhttp3.WebSocketListener;
  */
 final class OkHttpConnector implements DestinationSocket.Connector
 {
+	/** The longest relay frame read, in characters. */
+	static final int MAX_FRAME_CHARS = 16_384;
+	/** WebSocket close code 1009: a message too big to process. */
+	static final int CLOSE_TOO_BIG = 1009;
+	static final long MAX_RETRY_AFTER_SECONDS = 3_600;
+
 	static final long PING_SECONDS = 30;
 
 	private final OkHttpClient client;
@@ -47,6 +53,13 @@ final class OkHttpConnector implements DestinationSocket.Connector
 			@Override
 			public void onMessage(WebSocket webSocket, String text)
 			{
+				// A frame is a few hundred bytes. A far larger one is not a frame this plugin reads: drop the socket,
+				// which reconnects as after any drop.
+				if (text.length() > MAX_FRAME_CHARS)
+				{
+					webSocket.close(CLOSE_TOO_BIG, null);
+					return;
+				}
 				events.text(connection, text);
 			}
 
@@ -82,7 +95,8 @@ final class OkHttpConnector implements DestinationSocket.Connector
 		}
 		try
 		{
-			return Math.max(0, Long.parseLong(header.trim()));
+			// At most an hour, as for a sync: a wait of years would leave Walk here off until the next login.
+			return Math.min(MAX_RETRY_AFTER_SECONDS, Math.max(0, Long.parseLong(header.trim())));
 		}
 		catch (NumberFormatException e)
 		{

@@ -17,8 +17,10 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
@@ -34,6 +36,7 @@ import net.runelite.api.NPC;
 import net.runelite.api.Player;
 import net.runelite.api.Quest;
 import net.runelite.api.QuestState;
+import net.runelite.api.WorldType;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.ActorDeath;
 import net.runelite.api.events.ChatMessage;
@@ -51,6 +54,7 @@ import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
+import net.runelite.client.config.RuneScapeProfileType;
 import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
@@ -110,9 +114,17 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 {
 	private static final Logger log = LoggerFactory.getLogger(OsrsIndexPlugin.class);
 
-	static final String TOKEN_PREFIX = "osrsidx_";
+	static final String TOKEN_PREFIX = Tokens.PREFIX;
+
+	/**
+	 * Worlds whose progress is not the account's own: Leagues, Deadman, betas, speedrunning, tournaments, Fresh Start
+	 * and the PvP Arena and Last Man Standing worlds. A sync from one would replace the character's real data.
+	 */
+	static final Set<WorldType> SEPARATE_WORLDS = Collections.unmodifiableSet(EnumSet.of(WorldType.SEASONAL,
+		WorldType.DEADMAN, WorldType.BETA_WORLD, WorldType.NOSAVE_MODE, WorldType.TOURNAMENT_WORLD,
+		WorldType.FRESH_START_WORLD, WorldType.QUEST_SPEEDRUNNING, WorldType.PVP_ARENA, WorldType.LAST_MAN_STANDING));
 	/** This release, as build.gradle's {@code version} says; the plugin bus {@code hello} carries it. */
-	static final String VERSION = "0.5.0";
+	static final String VERSION = "1.0.0";
 	/** This plugin's id on the plugin bus (docs/plugin-bus.md), which is also its namespace there. */
 	static final String BUS_ID = "osrsindex";
 	private static final MediaType JSON = MediaType.parse("application/json");
@@ -205,6 +217,11 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 	private String lastDialogueName;
 	private int tickCount;
 	private boolean profileLoaded;
+	/**
+	 * Whether this world keeps the account's own progress ({@link #ownWorld}). On any other, nothing is read for the
+	 * sync, kept or sent. Set at login and checked every tick, as a hop can change it.
+	 */
+	private boolean onOwnWorld;
 	private boolean profileUnsaved;
 	private boolean linkOfferedThisSession;
 	/** The player clicked Link: open the approval page once the code arrives. Set on the client thread, read on OkHttp's. */
@@ -236,6 +253,8 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 	private boolean announcedAccountFull;
 	/** Parts the site refused alone as too large this session, so each is logged once, not on every change. */
 	private final Set<Part> warnedTooLarge = EnumSet.noneOf(Part.class);
+	/** The refusals already put in chat this session, by their plain code. */
+	private final Set<String> chattedRefusals = new HashSet<>();
 
 	@Provides
 	OsrsIndexConfig provideConfig(ConfigManager configManager)
@@ -262,6 +281,7 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		guideTracker.panel().itemImages((itemId, target) -> itemManager.getImage(itemId).addTo(target));
 		guideTracker.itemIds(this::itemIdByName);
 		guideTracker.untradeable(id -> !itemManager.getItemComposition(id).isTradeable());
+		guideTracker.panel().deferWhileHidden();
 		panel = new OsrsIndexPanel(this, guideTracker.panel());
 		panel.showGuidesTab(config.showGuides());
 		navigationButton = NavigationButton.builder()
@@ -327,9 +347,10 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		clientToolbar.removeNavigation(navigationButton);
 	}
 
+	/** The token as set, without the spaces and invisible characters a paste can carry; empty for none. */
 	private String token()
 	{
-		return config.token() == null ? "" : config.token().trim();
+		return Tokens.normalize(config.token());
 	}
 
 	// --- linking -----------------------------------------------------------
@@ -453,12 +474,13 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		// This line first, so it is never queued behind the answer's line.
 		chat("Unlinked. Nothing more is sent until you link again. To remove what was sent, use "
 			+ "\"Delete tracker data\" on your account page.");
+		// Forget it first, so this client is unlinked whatever happens to the revoke.
+		configManager.unsetConfiguration(OsrsIndexConfig.GROUP, "token");
 		// A token not in the site's form was never sent, so the site has nothing to revoke.
-		if (token.startsWith(TOKEN_PREFIX))
+		if (Tokens.wellFormed(token))
 		{
 			new TokenRevoker(siteHttp).revoke(token, result -> chat(TokenRevoker.chatLine(result)));
 		}
-		configManager.unsetConfiguration(OsrsIndexConfig.GROUP, "token");
 		refreshPanel();
 	}
 
@@ -595,8 +617,12 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 				refreshPanel();
 				guideTracker.loggedOut();
 				break;
+			case HOPPING:
+				// Save under the world being left: the next one may keep its own profile.
+				saveProfile();
+				break;
 			default:
-				// HOPPING and LOADING keep the session: same account, same data.
+				// LOADING keeps the session: same account, same data.
 				break;
 		}
 	}
@@ -663,8 +689,9 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		}
 		else if (id == InventoryID.BANK)
 		{
-			// Readable only while open, so capture it now rather than at send time, and keep when.
-			capturedBank = reader.bank();
+			// Readable only while open, so capture it now rather than at send time, and keep when. Never on a world
+			// that keeps other progress.
+			capturedBank = onOwnWorld ? reader.bank() : null;
 			if (capturedBank != null)
 			{
 				partTimes.mark(Part.BANK, Instant.now());
@@ -783,11 +810,19 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		}
 		if (ticksSinceLogin == LOGIN_SETTLE_TICKS)
 		{
-			loadProfile();
-			markAllDirty();
+			onOwnWorld = ownWorld();
+			if (onOwnWorld)
+			{
+				loadProfile();
+				markAllDirty();
+			}
 			panelCharacter = reader.characterName();
 			refreshPanel();
 			guideTracker.loggedIn();
+		}
+		else
+		{
+			checkWorldKind();
 		}
 
 		guideTracker.tick();
@@ -843,17 +878,26 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		}
 	}
 
-	/** A tradeable item's id by its exact name, from RuneLite's item prices, or -1: for guide items with no id. */
+	/** RuneLite's tradeable items by lower-case name, built once from its item prices, for {@link #itemIdByName}. */
+	private Map<String, Integer> itemIdsByName = Collections.emptyMap();
+
+	/**
+	 * A tradeable item's id by its exact name, from RuneLite's item prices, or -1: for guide items with no id. One
+	 * lookup in a map built once, not a search of every price per item: a guide can name thousands of items.
+	 */
 	private int itemIdByName(String name)
 	{
-		for (ItemPrice price : itemManager.search(name))
+		if (itemIdsByName.isEmpty())
 		{
-			if (price.getName().equalsIgnoreCase(name))
+			Map<String, Integer> byName = new HashMap<>();
+			for (ItemPrice price : itemManager.search(""))
 			{
-				return price.getId();
+				byName.putIfAbsent(price.getName().toLowerCase(Locale.ROOT), price.getId());
 			}
+			itemIdsByName = byName;
 		}
-		return -1;
+		Integer id = itemIdsByName.get(name.toLowerCase(Locale.ROOT));
+		return id == null ? -1 : id;
 	}
 
 	// --- change tracking ---------------------------------------------------
@@ -882,7 +926,18 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		poll(Part.ACCOUNT, reader.account());
 		poll(Part.DIARIES, reader.diaries());
 		poll(Part.COMBAT_ACHIEVEMENTS, reader.combatAchievements());
-		poll(Part.COLLECTION_LOG, reader.collectionLog(collectionLog));
+		// The log's counters are not read while another player's log is open, in case they show theirs.
+		if (!viewingAnotherCollectionLog())
+		{
+			poll(Part.COLLECTION_LOG, reader.collectionLog(collectionLog));
+		}
+	}
+
+	/** True while a collection log is open that is not known to be the player's own. */
+	private boolean viewingAnotherCollectionLog()
+	{
+		Widget frame = client.getWidget(InterfaceID.Collection.FRAME);
+		return frame != null && !frame.isHidden() && !viewingOwnCollectionLog();
 	}
 
 	private void poll(Part part, JsonElement value)
@@ -949,7 +1004,7 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 			case COMBAT_ACHIEVEMENTS:
 				return reader.combatAchievements();
 			case COLLECTION_LOG:
-				return reader.collectionLog(collectionLog);
+				return viewingAnotherCollectionLog() ? null : reader.collectionLog(collectionLog);
 			case LOCATION:
 				return reader.location();
 			case VARS:
@@ -1000,11 +1055,13 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 	/**
 	 * True while the player's own collection log is open. The POH Adventure Log shows another player's
 	 * log in the same interface, with that player's name in the header, and those items are not ours.
+	 * When the header or the player's name cannot be read, the log is not taken as ours: an item missed
+	 * is read again on the next visit, but another player's item would be kept and sent as the player's.
 	 */
 	private boolean viewingOwnCollectionLog()
 	{
 		Widget frame = client.getWidget(InterfaceID.Collection.FRAME);
-		if (frame == null || frame.isHidden())
+		if (frame == null || frame.isHidden() || !onOwnWorld)
 		{
 			return false;
 		}
@@ -1012,7 +1069,7 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		String name = reader.characterName();
 		if (header == null || name == null)
 		{
-			return header == null;
+			return false;
 		}
 		String title = Text.removeTags(header.getText() == null ? "" : header.getText()).replace(' ', ' ');
 		int dash = title.indexOf(" - ");
@@ -1020,6 +1077,40 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 	}
 
 	// --- profile persistence -----------------------------------------------
+
+	/** Whether this world keeps the account's own progress: a standard profile, and none of {@link #SEPARATE_WORLDS}. */
+	private boolean ownWorld()
+	{
+		return RuneScapeProfileType.getCurrent(client) == RuneScapeProfileType.STANDARD
+			&& Collections.disjoint(client.getWorldType(), SEPARATE_WORLDS);
+	}
+
+	/**
+	 * A hop to or from a world that keeps other progress. Leaving the account's own world drops everything queued and
+	 * stops keeping data; coming back reads the account's own profile again and resends everything. The profile was
+	 * saved when the hop began, under the world being left.
+	 */
+	private void checkWorldKind()
+	{
+		boolean own = ownWorld();
+		if (own == onOwnWorld)
+		{
+			return;
+		}
+		onOwnWorld = own;
+		if (own)
+		{
+			loadProfile();
+			markAllDirty();
+		}
+		else
+		{
+			dirty.clear();
+			capturedBank = null;
+			profileLoaded = false;
+			profileUnsaved = false;
+		}
+	}
 
 	private void loadProfile()
 	{
@@ -1050,13 +1141,14 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 	private void maybeSend()
 	{
 		String token = token();
-		if (inFlight || dirty.isEmpty() || token.isEmpty() || token.equals(rejectedToken)
+		if (inFlight || dirty.isEmpty() || token.isEmpty() || token.equals(rejectedToken) || !onOwnWorld
 			|| System.currentTimeMillis() < nextSendAtMillis)
 		{
 			return;
 		}
-		if (!token.startsWith(TOKEN_PREFIX))
+		if (!Tokens.wellFormed(token))
 		{
+			// Never sent: OkHttp would refuse it as a header, and log the whole value in the refusal.
 			rejectedToken = token;
 			chat("That token does not look like one from osrsindex.com/account (it should start with "
 				+ TOKEN_PREFIX + ").");
@@ -1136,8 +1228,9 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 				SyncOutcome outcome;
 				try (ResponseBody body = response.body())
 				{
-					outcome = SyncOutcome.of(response.code(), body == null ? "" : body.string(),
-						response.header("Retry-After"), timing);
+					// A sync answer is a few hundred bytes: a larger one is not read, and its status decides.
+					String text = body == null ? "" : SiteHttp.bounded(body, 65_536);
+					outcome = SyncOutcome.of(response.code(), text == null ? "" : text, response.header("Retry-After"), timing);
 				}
 				catch (IOException e)
 				{
@@ -1202,15 +1295,22 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 				// fall through
 			case REJECTED:
 				// When the site names the part it refused, only that part waits for its next change. The
-				// others stay dirty and go out on the next send: a refusal does not start the site's floor.
+				// others stay dirty and go out after the floor: a part that keeps changing and keeps being
+				// refused, such as the location, would otherwise be posted every few seconds.
 				Set<Part> dropped = outcome.dropped(parts);
 				for (Part part : dropped)
 				{
 					dirty.remove(part, stamps.get(part));
 				}
-				log.warn("OSRS Index refused a sync of {}: {}; dropped {}", parts, outcome.code, dropped);
-				chat(outcome.playerMessage != null ? RouteDispatcher.chatSafe(outcome.playerMessage)
-					: "The site refused part of a sync (" + outcome.code + "). It will try again when that data changes.");
+				nextSendAtMillis = now + siteConfig.timing.syncFloorSeconds * 1_000L;
+				String refusal = SyncOutcome.plainCode(outcome.code);
+				log.warn("OSRS Index refused a sync of {}: {}; dropped {}", parts, refusal, dropped);
+				// Once per refusal a session, so a refusal that repeats does not fill the chat.
+				if (chattedRefusals.add(refusal))
+				{
+					chat(outcome.playerMessage != null ? RouteDispatcher.chatSafe(outcome.playerMessage)
+						: "The site refused part of a sync (" + refusal + "). It will try again when that data changes.");
+				}
 				break;
 			case BAD_TOKEN:
 				if (!token.equals(token()))
@@ -1362,6 +1462,7 @@ public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, O
 		lastWaitMessage = null;
 		reader.forgetUnreadableVars();
 		warnedTooLarge.clear();
+		chattedRefusals.clear();
 		announcedFirstSync = false;
 		announcedAccountFull = false;
 		linkOfferedThisSession = false;

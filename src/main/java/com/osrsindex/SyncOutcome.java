@@ -5,6 +5,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import java.util.EnumSet;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * What one sync response means for the plugin, decided from the status, the reason code (and, for a
@@ -245,4 +246,15 @@ final class SyncOutcome
 			return 0;
 		}
 	}
+
+	/**
+	 * A refusal's code as chat and the log may show it: the site's codes are lower-case words joined by
+	 * underscores, and anything else, which could carry chat markup or line breaks, shows as {@code unknown}.
+	 */
+	static String plainCode(String code)
+	{
+		return code != null && PLAIN_CODE.matcher(code).matches() ? code : "unknown";
+	}
+
+	private static final Pattern PLAIN_CODE = Pattern.compile("[a-z0-9_]{1,40}");
 }

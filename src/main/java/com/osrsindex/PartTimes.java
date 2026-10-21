@@ -89,7 +89,12 @@ final class PartTimes
 				{
 					try
 					{
-						mark(part, Instant.parse(value.getAsString()));
+						Instant at = Instant.parse(value.getAsString());
+						// A time after now is from a damaged profile or a wrong clock: as good as none.
+						if (!at.isAfter(Instant.now()))
+						{
+							mark(part, at);
+						}
 					}
 					catch (DateTimeParseException ignored)
 					{

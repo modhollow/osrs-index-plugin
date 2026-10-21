@@ -92,7 +92,9 @@ Only while linked, and only what changed. Each group can be turned off in the pl
 - your password or login details;
 - chat messages: the plugin reads kill count lines inside the client and sends only the boss and the count;
 - other players' data: another player's Adventure Log is skipped;
-- leagues, POH and interface settings.
+- anything from Leagues, Deadman, beta, speedrunning, tournament, Fresh Start, PvP Arena or Last Man Standing worlds,
+  whose progress is not your account's own: on those worlds the plugin reads and sends nothing;
+- values for the player-owned house, interface settings and options, or account details such as bank PIN state.
 
 The plugin sends at most one sync every 30 seconds. Nothing is lost if a sync fails: a change stays queued until the
 site confirms it was stored.
@@ -141,8 +143,9 @@ and has no analytics or tracking.
 While this client is linked and you are logged in, it asks osrsindex.com about once an hour for its sync settings.
 That lets the site adjust the plugin without you installing an update:
 - **Pause a group** it cannot take right now, such as the bank. It can never turn on a group you turned off.
-- **Choose the progress values** sent, for example to add a new quest's progress. Leagues, POH and interface
-  settings are never sent, whatever it asks.
+- **Choose the progress values** sent, for example to add a new quest's progress. It can only pick from the
+  plugin's own list, or add values newer than this release that are named as progress. Leagues, POH, interface
+  settings and account details are never sent, whatever it asks.
 - **Tune the waits**, such as how long to wait after a busy site, within limits the plugin sets. None can make the
   plugin send more often than it does on its own.
 - **Pause Walk here** for a while.
@@ -157,6 +160,11 @@ Settings from the site are only ever data: it cannot make the plugin run anythin
 <br clear="right" />
 
 ## Your data
+
+The plugin's wiki has the full picture: [Security and your data](https://github.com/modhollow/osrs-index-plugin/wiki/Security-and-your-data)
+says what leaves your computer, how your link token is kept, what osrsindex.com can and cannot change, and what the
+plugin never does. [Connections it makes](https://github.com/modhollow/osrs-index-plugin/wiki/Connections-it-makes)
+lists every request.
 
 - **Who sees it:** only you, signed in at osrsindex.com.
 - **Delete it:** **Delete tracker data** on your [account page](https://osrsindex.com/account#runelite) removes

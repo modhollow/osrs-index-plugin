@@ -266,4 +266,52 @@ public class AccountLinkerTest
 				inWindow <= AccountLinker.MAX_REQUESTS_PER_MINUTE);
 		}
 	}
+
+	@Test
+	public void aCodeThatIsNotPlainLettersAndDigitsIsNeverShown()
+	{
+		for (String code : new String[]{"<html><img src='https://example.com/p.png'>", "<col=ff0000>KXQ4", "KXQ4 7MNP", ""})
+		{
+			linker.start("Zezima");
+			JsonObject json = started(null);
+			json.addProperty("user_code", code);
+			answer(200, json);
+			assertEquals(code, AccountLinker.State.UNAVAILABLE, linker.state());
+		}
+	}
+
+	@Test
+	public void aStartAnswerOfTheWrongShapeIsUnavailableAndLinkStillWorksAfter()
+	{
+		linker.start("Zezima");
+		JsonObject json = started(null);
+		json.add("expires_in", com.google.gson.JsonNull.INSTANCE);
+		json.addProperty("interval", "soon");
+		answer(200, json);
+		assertEquals("missing numbers fall back to the defaults", AccountLinker.State.WAITING, linker.state());
+
+		linker.cancel();
+		linker.start("Zezima");
+		JsonObject broken = started(null);
+		broken.add("device_code", com.google.gson.JsonNull.INSTANCE);
+		answer(200, broken);
+		assertEquals(AccountLinker.State.UNAVAILABLE, linker.state());
+
+		linker.start("Zezima");
+		answer(200, started(null));
+		assertEquals("Link works again after a bad answer", AccountLinker.State.WAITING, linker.state());
+	}
+
+	@Test
+	public void anApprovedTokenThatCouldNotBeSentIsNeverKept()
+	{
+		startWaiting(null);
+		now += 15_000;
+		linker.tick();
+		JsonObject approved = status("approved");
+		approved.addProperty("token", OsrsIndexPlugin.TOKEN_PREFIX + "b".repeat(42) + " ");
+		answer(200, approved);
+		assertTrue(tokens.isEmpty());
+		assertEquals(AccountLinker.State.UNAVAILABLE, linker.state());
+	}
 }

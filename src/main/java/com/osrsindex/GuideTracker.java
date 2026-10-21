@@ -8,8 +8,10 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.IntPredicate;
 import java.util.function.ToIntFunction;
 import net.runelite.api.Client;
@@ -26,6 +28,7 @@ import net.runelite.client.callback.ClientThread;
 import net.runelite.client.events.PluginMessage;
 import net.runelite.client.ui.overlay.worldmap.WorldMapPoint;
 import net.runelite.client.ui.overlay.worldmap.WorldMapPointManager;
+import net.runelite.client.util.Text;
 
 /**
  * Follows one osrsindex.com guide in the client: what the Guides view shows, the progress kept in the RuneLite
@@ -387,7 +390,7 @@ final class GuideTracker implements GuidesPanel.Actions
 
 	private void guideArrived(String id, GuideFetcher.Answer<Guide> answer)
 	{
-		if (!id.equals(guideId))
+		if (stopped || !id.equals(guideId))
 		{
 			return;
 		}
@@ -669,8 +672,20 @@ final class GuideTracker implements GuidesPanel.Actions
 		}
 	}
 
+	/** Var ids a guide named that the game would not let RuneLite read: not read again this session. */
+	private final Set<Integer> unreadableVarbits = new HashSet<>();
+	private final Set<Integer> unreadableVarps = new HashSet<>();
+
+	/** Set once the plugin stops; every later task does nothing. */
+	private volatile boolean stopped;
+
+	/**
+	 * The plugin stopped. A download or client-thread task already queued may still arrive; {@link #stopped} keeps it
+	 * from putting a marker back, which nothing would remove.
+	 */
 	void shutDown()
 	{
+		stopped = true;
 		clearMarkers();
 	}
 
@@ -686,6 +701,10 @@ final class GuideTracker implements GuidesPanel.Actions
 	/** Read what changed, tick the steps the character has done, and point the markers at the current step. */
 	private void check()
 	{
+		if (stopped)
+		{
+			return;
+		}
 		lastCheckTick = ticks;
 		if (guide != null && loggedIn)
 		{
@@ -732,13 +751,35 @@ final class GuideTracker implements GuidesPanel.Actions
 		builder.questPoints(client.getVarpValue(VarPlayerID.QP));
 		if (varsDirty)
 		{
+			// A guide may name an id the game does not have, by mistake or not: RuneLite throws for it, so it is
+			// skipped for the rest of the session and its condition stays unknown.
 			for (int id : GuideRules.varbits(guide))
 			{
-				builder.varbit(id, client.getVarbitValue(id));
+				if (!unreadableVarbits.contains(id))
+				{
+					try
+					{
+						builder.varbit(id, client.getVarbitValue(id));
+					}
+					catch (RuntimeException unreadable)
+					{
+						unreadableVarbits.add(id);
+					}
+				}
 			}
 			for (int id : GuideRules.varps(guide))
 			{
-				builder.varp(id, client.getVarpValue(id));
+				if (!unreadableVarps.contains(id))
+				{
+					try
+					{
+						builder.varp(id, client.getVarpValue(id));
+					}
+					catch (RuntimeException unreadable)
+					{
+						unreadableVarps.add(id);
+					}
+				}
 			}
 		}
 		if (questsDirty)
@@ -830,6 +871,11 @@ final class GuideTracker implements GuidesPanel.Actions
 
 	private void updateMarkers()
 	{
+		if (stopped)
+		{
+			clearMarkers();
+			return;
+		}
 		GuideRules.Count count = guide == null || !loggedIn || !config.showGuides() ? null
 			: GuideRules.count(guide, progress, facts);
 		Guide.Step current = count == null ? null : count.current;
@@ -859,7 +905,8 @@ final class GuideTracker implements GuidesPanel.Actions
 			mapPoint = WorldMapPoint.builder()
 				.worldPoint(point)
 				.image(mapIcon)
-				.name(current.title)
+				// RuneLite puts the name into the world map's menu, which reads tags: shown as text.
+				.name(Text.escapeJagex(current.title))
 				.tooltip("OSRS Index: " + current.title)
 				.jumpOnClick(true)
 				.snapToEdge(true)

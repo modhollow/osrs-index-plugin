@@ -13,6 +13,7 @@ import java.awt.Graphics2D;
 import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.RenderingHints;
+import java.awt.event.HierarchyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.geom.Path2D;
@@ -25,6 +26,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import javax.imageio.ImageIO;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -195,6 +197,12 @@ final class GuidesPanel extends JPanel
 	private final Set<String> allItems = new HashSet<>();
 	private String shownGuide;
 	private String shownCurrent;
+	/** The newest view not yet built, and whether a build is already queued for it. */
+	private volatile View pendingView;
+	private final AtomicBoolean buildQueued = new AtomicBoolean();
+	private boolean deferWhileHidden;
+	/** A build was skipped while the panel was hidden. */
+	private boolean stale;
 	/** Where the player is in the guide shown, worked out once per build. */
 	private GuideRules.Standing standing;
 
@@ -206,12 +214,40 @@ final class GuidesPanel extends JPanel
 		rebuild();
 	}
 
+	/**
+	 * Show {@code next}. Views that arrive faster than the panel can build them are coalesced: only the newest is
+	 * built, once.
+	 */
 	void show(View next)
+	{
+		pendingView = next;
+		if (buildQueued.compareAndSet(false, true))
+		{
+			SwingUtilities.invokeLater(() ->
+			{
+				buildQueued.set(false);
+				view = pendingView;
+				rebuild();
+			});
+		}
+	}
+
+	/**
+	 * Build only while the panel is on screen, and catch up when it is shown again. A guide can have thousands of
+	 * steps, and rebuilding it for every change while no one is looking would keep the interface thread busy.
+	 */
+	void deferWhileHidden()
 	{
 		SwingUtilities.invokeLater(() ->
 		{
-			view = next;
-			rebuild();
+			deferWhileHidden = true;
+			addHierarchyListener(event ->
+			{
+				if ((event.getChangeFlags() & HierarchyEvent.SHOWING_CHANGED) != 0 && isShowing() && stale)
+				{
+					rebuild();
+				}
+			});
 		});
 	}
 
@@ -241,6 +277,12 @@ final class GuidesPanel extends JPanel
 
 	private void rebuild()
 	{
+		if (deferWhileHidden && !isShowing())
+		{
+			stale = true;
+			return;
+		}
+		stale = false;
 		removeAll();
 		if (view.guideOpen)
 		{
@@ -296,7 +338,7 @@ final class GuidesPanel extends JPanel
 			add(gap(6));
 		}
 		add(gap(4));
-		add(text("Progress stays on this computer, in your RuneLite profile.", small(), FAINT, CONTENT));
+		add(text("Progress is kept in your RuneLite profile, and never sent to osrsindex.com.", small(), FAINT, CONTENT));
 	}
 
 	private JComponent guideCard(Guide.Summary summary, boolean following)
@@ -531,7 +573,7 @@ final class GuidesPanel extends JPanel
 			left = sectionOf(guide, count.current.id).title;
 			right = "step " + (all.indexOf(count.current) + 1) + " of " + all.size();
 		}
-		JLabel rightLabel = new JLabel(right);
+		JLabel rightLabel = plain(new JLabel(right));
 		rightLabel.setFont(small());
 		rightLabel.setForeground(MUTED);
 		under.add(top(rightLabel), BorderLayout.EAST);
@@ -696,7 +738,7 @@ final class GuidesPanel extends JPanel
 		{
 			Color colour = bagColour(step);
 			JLabel bag = new JLabel(GuideIcons.bag(colour));
-			bag.setToolTipText(bagWords(step));
+			bag.setToolTipText(tip(bagWords(step)));
 			parts.add(bag);
 		}
 		if (step.point() != null)
@@ -907,7 +949,7 @@ final class GuidesPanel extends JPanel
 				lines.add(itemLine(collect.item, haveTag(have, view.loggedIn, true), haveTagColour(have, view.loggedIn, true),
 					about.isEmpty() ? null : String.join(", ", about)));
 			}
-			addLines(card, lines);
+			addLines(card, folded(step.id + "/collect", lines));
 		}
 		if (!step.places.isEmpty() || !step.travel.isEmpty())
 		{
@@ -938,7 +980,7 @@ final class GuidesPanel extends JPanel
 				GuideRules.Met met = GuideRules.requirement(requirement, view.facts);
 				String name = requirementName(requirement);
 				JLabel need = dotChip(name == null ? "Check on osrsindex.com" : name, metColour(met));
-				need.setToolTipText(requirementText(requirement, met));
+				need.setToolTipText(tip(requirementText(requirement, met)));
 				needs.add(need);
 			}
 			card.add(chipRows(needs, CARD_TEXT));
@@ -1052,7 +1094,7 @@ final class GuidesPanel extends JPanel
 	private JComponent itemLine(Guide.Item item, String tag, Color tagColour, String second)
 	{
 		Sprite sprite = new Sprite();
-		sprite.setToolTipText(itemText(item));
+		sprite.setToolTipText(tip(itemText(item)));
 		if (item.id > 0)
 		{
 			itemImages.show(item.id, sprite);
@@ -1809,6 +1851,22 @@ final class GuidesPanel extends JPanel
 	}
 
 	/**
+	 * A label whose text may come from the site, or be built from it: always shown as text. Swing would otherwise draw
+	 * a text that starts with {@code <html>} as HTML, and load any picture it names from any server.
+	 */
+	private static JLabel plain(JLabel label)
+	{
+		label.putClientProperty("html.disable", Boolean.TRUE);
+		return label;
+	}
+
+	/** A tooltip for text that may come from the site: escaped inside the plugin's own HTML, so it shows as text. */
+	static String tip(String text)
+	{
+		return text == null || text.isEmpty() ? null : "<html>" + OsrsIndexPanel.escape(text) + "</html>";
+	}
+
+	/**
 	 * Wrapped text {@code width} pixels wide. Swing's HTML reads a CSS pixel as 4/3 of a screen pixel, so the width
 	 * is given in CSS as three quarters of it.
 	 */
@@ -1852,7 +1910,7 @@ final class GuidesPanel extends JPanel
 	/** A small capitalised tag on a tinted ground: "SOLO", "OPTIONAL", "FOLLOWING". */
 	private static JLabel chip(String text, Color colour, Color ground)
 	{
-		JLabel chip = new JLabel(text);
+		JLabel chip = plain(new JLabel(text));
 		chip.setFont(small());
 		chip.setForeground(colour);
 		chip.setOpaque(true);
@@ -1864,7 +1922,7 @@ final class GuidesPanel extends JPanel
 	/** A requirement as a chip with its dot: green met, orange met with a boost, red not yet, grey unknown. */
 	private static JLabel dotChip(String text, Color dot)
 	{
-		JLabel chip = new JLabel(text, GuideIcons.dot(dot, 12), SwingConstants.LEFT);
+		JLabel chip = plain(new JLabel(text, GuideIcons.dot(dot, 12), SwingConstants.LEFT));
 		chip.setIconTextGap(4);
 		chip.setFont(small());
 		chip.setForeground(TEXT);
@@ -2006,7 +2064,7 @@ final class GuidesPanel extends JPanel
 	/** A small text link: {@code colour}, lit to {@code hover} under the mouse. */
 	private static JComponent link(String text, Color colour, Color hover, Runnable action)
 	{
-		JLabel label = new JLabel(text);
+		JLabel label = plain(new JLabel(text));
 		label.setFont(small());
 		label.setForeground(colour);
 		label.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
@@ -2040,6 +2098,7 @@ final class GuidesPanel extends JPanel
 	private static JButton button(String text, Runnable action)
 	{
 		JButton button = new JButton(text);
+		button.putClientProperty("html.disable", Boolean.TRUE);
 		button.addActionListener(e -> action.run());
 		button.setAlignmentX(Component.LEFT_ALIGNMENT);
 		button.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));

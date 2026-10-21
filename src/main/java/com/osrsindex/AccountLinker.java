@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.function.LongSupplier;
+import java.util.regex.Pattern;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.MediaType;
@@ -69,6 +70,18 @@ final class AccountLinker
 
 	private static final MediaType JSON = MediaType.parse("application/json");
 	private static final int DEFAULT_INTERVAL_SECONDS = 15;
+
+	/**
+	 * The code the player checks, shown in the panel and in chat. The site sends 8 letters and digits grouped 4-4; a
+	 * little room either way, but never markup, so a hostile answer cannot draw anything with it.
+	 */
+	static final Pattern USER_CODE = Pattern.compile("[A-Za-z0-9]{2,12}(-[A-Za-z0-9]{2,12}){0,3}");
+
+	/** The site sends {@code osrsidl_} and 43 characters; anything far longer is not a device code. */
+	static final int MAX_DEVICE_CODE_LENGTH = 512;
+
+	/** A link answer is a few hundred bytes; one far larger is not read. */
+	static final long MAX_ANSWER_BYTES = 65_536;
 	/** The soonest {@link #pollSoon} polls after the last request. */
 	static final long EARLY_POLL_GAP_MILLIS = 5_000L;
 	/**
@@ -151,13 +164,15 @@ final class AccountLinker
 		{
 			inFlight = false;
 			playerMessage = SiteConfig.playerMessage(json);
-			if (status == 200 && json != null && json.has("device_code") && json.has("user_code"))
+			String code = string(json, "user_code");
+			String device = string(json, "device_code");
+			if (status == 200 && code != null && USER_CODE.matcher(code).matches() && device != null
+				&& device.length() <= MAX_DEVICE_CODE_LENGTH)
 			{
 				long now = clock.getAsLong();
-				String code = json.get("user_code").getAsString();
-				deviceCode = json.get("device_code").getAsString();
-				int expiresIn = json.has("expires_in") ? json.get("expires_in").getAsInt() : 600;
-				intervalSeconds = Math.max(5, json.has("interval") ? json.get("interval").getAsInt() : DEFAULT_INTERVAL_SECONDS);
+				deviceCode = device;
+				long expiresIn = whole(json, "expires_in", 600, 60, 3_600);
+				intervalSeconds = (int) whole(json, "interval", DEFAULT_INTERVAL_SECONDS, 5, 300);
 				expiresAtMillis = now + expiresIn * 1_000L;
 				nextPollAtMillis = now + intervalSeconds * 1_000L;
 				earlyPollWanted = false;
@@ -194,6 +209,22 @@ final class AccountLinker
 	{
 		JsonElement value = json == null ? null : json.get(key);
 		return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isString() ? value.getAsString() : null;
+	}
+
+	/** A whole number from the answer, held between {@code min} and {@code max}; {@code fallback} when absent or not one. */
+	static long whole(JsonObject json, String key, long fallback, long min, long max)
+	{
+		JsonElement value = json == null ? null : json.get(key);
+		if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber())
+		{
+			return fallback;
+		}
+		double number = value.getAsDouble();
+		if (Double.isNaN(number))
+		{
+			return fallback;
+		}
+		return (long) Math.max(min, Math.min(max, number));
 	}
 
 	/**
@@ -250,17 +281,26 @@ final class AccountLinker
 		recordRequest(now);
 		transport.post(Endpoints.linkPoll(), body, (status, json) ->
 		{
+			// The next poll's time is set before inFlight clears, so a tick in between cannot send a second poll.
+			nextPollAtMillis = clock.getAsLong() + intervalSeconds * 1_000L;
 			inFlight = false;
 			playerMessage = SiteConfig.playerMessage(json);
-			nextPollAtMillis = clock.getAsLong() + intervalSeconds * 1_000L;
-			String result = json != null && json.has("status") ? json.get("status").getAsString() : "";
-			String code = json != null && json.has("code") ? json.get("code").getAsString() : "";
-			if (status == 200 && "approved".equals(result) && json.has("token"))
+			String result = string(json, "status");
+			result = result == null ? "" : result;
+			String code = string(json, "code");
+			code = code == null ? "" : code;
+			String token = string(json, "token");
+			if (status == 200 && "approved".equals(result) && Tokens.wellFormed(token))
 			{
-				String token = json.get("token").getAsString();
 				deviceCode = null;
 				set(State.IDLE, null);
 				listener.linked(token);
+			}
+			else if (status == 200 && "approved".equals(result))
+			{
+				// Approved, but with no token this client could send: never saved, and never put in a header.
+				deviceCode = null;
+				set(State.UNAVAILABLE, null);
 			}
 			else if (status == 200 && "pending".equals(result))
 			{
@@ -350,8 +390,9 @@ final class AccountLinker
 					JsonObject json = null;
 					try (ResponseBody responseBody = response.body())
 					{
-						JsonElement parsed = new JsonParser().parse(responseBody == null ? "" : responseBody.string());
-						json = parsed.isJsonObject() ? parsed.getAsJsonObject() : null;
+						String text = responseBody == null ? "" : SiteHttp.bounded(responseBody, MAX_ANSWER_BYTES);
+						JsonElement parsed = text == null ? null : new JsonParser().parse(text);
+						json = parsed != null && parsed.isJsonObject() ? parsed.getAsJsonObject() : null;
 					}
 					catch (IOException | RuntimeException ignored)
 					{

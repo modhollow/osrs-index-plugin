@@ -71,9 +71,9 @@ final class GuideFetcher
 	/** After a failure, Try again asks at once, but never sooner than this after the last ask. */
 	static final long RETRY_MILLIS = 10_000;
 	/** The largest body read, in bytes. A long guide is a few hundred kilobytes. */
-	static final int MAX_BODY_BYTES = 4_000_000;
+	static final int MAX_BODY_BYTES = 1_500_000;
 	/** Guides kept in memory at once. */
-	static final int CACHED_GUIDES = 8;
+	static final int CACHED_GUIDES = 4;
 
 	private final Transport transport;
 	private final LongSupplier clock;
@@ -365,7 +365,8 @@ final class GuideFetcher
 			.url(url)
 			.header("Accept", "application/json")
 			.get();
-		if (etag != null && !etag.isEmpty() && etag.length() <= 200)
+		// Printable ASCII only: OkHttp refuses any other header value by throwing, which would leave the fetch waiting.
+		if (etag != null && !etag.isEmpty() && etag.length() <= 200 && etag.chars().allMatch(c -> c >= 0x20 && c <= 0x7e))
 		{
 			request.header("If-None-Match", etag);
 		}

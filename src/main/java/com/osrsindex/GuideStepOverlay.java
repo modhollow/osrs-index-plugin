@@ -10,6 +10,7 @@ import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.overlay.OverlayPanel;
 import net.runelite.client.ui.overlay.OverlayPosition;
 import net.runelite.client.ui.overlay.components.LineComponent;
+import net.runelite.client.util.Text;
 
 /**
  * The current guide step in a box on the game screen, as Quest Helper shows its current step: the guide and its
@@ -41,14 +42,25 @@ final class GuideStepOverlay extends OverlayPanel
 		Box(String guide, String count, String step, String text, String where, List<String> missing,
 			String questHelper)
 		{
-			this.guide = guide;
-			this.count = count;
-			this.step = step;
-			this.text = text;
-			this.where = where;
-			this.missing = Collections.unmodifiableList(missing);
-			this.questHelper = questHelper;
+			// The overlay draws RuneLite's colour tags, and these come from the site: shown as plain text.
+			this.guide = plain(guide);
+			this.count = plain(count);
+			this.step = plain(step);
+			this.text = plain(text);
+			this.where = plain(where);
+			List<String> plainMissing = new ArrayList<>();
+			for (String item : missing)
+			{
+				plainMissing.add(plain(item));
+			}
+			this.missing = Collections.unmodifiableList(plainMissing);
+			this.questHelper = plain(questHelper);
 		}
+	}
+
+	private static String plain(String text)
+	{
+		return text == null ? null : Text.removeTags(text);
 	}
 
 	private volatile Box box;
