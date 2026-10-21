@@ -107,8 +107,8 @@ import org.slf4j.LoggerFactory;
  */
 @PluginDescriptor(
 	name = "OSRS Index",
-	description = "Syncs your character to your osrsindex.com account",
-	tags = {"tracker", "sync", "bank", "collection log", "quests", "diary", "osrsindex"}
+	description = "Syncs your character to your osrsindex.com account, and follows its guides in game",
+	tags = {"tracker", "sync", "bank", "collection log", "quests", "diary", "guide", "osrsindex"}
 )
 public class OsrsIndexPlugin extends Plugin implements AccountLinker.Listener, OsrsIndexPanel.Actions
 {
